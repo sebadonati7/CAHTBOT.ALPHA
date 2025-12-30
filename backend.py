@@ -375,37 +375,28 @@ def calculate_epi(datastore):
     else:
         epi_cau = epi_ps = epi_gm = 0.0
     
-    # Calcola z-score se SciPy disponibile
-    if SCIPY_AVAILABLE:
-        values = [epi_cau, epi_ps, epi_gm]
-        if any(v > 0 for v in values):
-            try:
-                mean_val = sum(values) / len(values)
-                std_val = (sum((x - mean_val) ** 2 for x in values) / len(values)) ** 0.5
-                
-                if std_val > 0:
-                    z_cau = (epi_cau - mean_val) / std_val
-                    z_ps = (epi_ps - mean_val) / std_val
-                    z_gm = (epi_gm - mean_val) / std_val
-                else:
-                    z_cau = z_ps = z_gm = 0.0
-            except:
-                z_cau = z_ps = z_gm = 0.0
-        else:
-            z_cau = z_ps = z_gm = 0.0
-    else:
-        # Calcolo manuale z-score
-        values = [epi_cau, epi_ps, epi_gm]
-        mean_val = sum(values) / len(values)
-        variance = sum((x - mean_val) ** 2 for x in values) / len(values)
-        std_val = variance ** 0.5
+    # Helper function for z-score calculation
+    def calculate_z_scores(values):
+        """Calculate z-scores for a list of values"""
+        if not any(v > 0 for v in values):
+            return [0.0] * len(values)
         
-        if std_val > 0:
-            z_cau = (epi_cau - mean_val) / std_val
-            z_ps = (epi_ps - mean_val) / std_val
-            z_gm = (epi_gm - mean_val) / std_val
-        else:
-            z_cau = z_ps = z_gm = 0.0
+        try:
+            mean_val = sum(values) / len(values)
+            variance = sum((x - mean_val) ** 2 for x in values) / len(values)
+            std_val = variance ** 0.5
+            
+            if std_val > 0:
+                return [(v - mean_val) / std_val for v in values]
+            else:
+                return [0.0] * len(values)
+        except (ZeroDivisionError, ValueError, ArithmeticError):
+            return [0.0] * len(values)
+    
+    # Calcola z-score
+    values = [epi_cau, epi_ps, epi_gm]
+    z_scores = calculate_z_scores(values)
+    z_cau, z_ps, z_gm = z_scores
     
     # Determina status
     def get_status(z_score):
