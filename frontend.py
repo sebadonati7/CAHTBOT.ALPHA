@@ -11,6 +11,8 @@ from datetime import datetime
 # PARTE 1: Import per State Machine
 from typing import List, Dict, Any, Optional, Union, Generator, Tuple
 from enum import Enum
+# PARTE 2: Import per calcoli geospaziali
+import math
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 import groq
@@ -56,6 +58,8 @@ MODEL_CONFIG = {
     "complex": "llama-3.3-70b-versatile",
     "fallback": "gemini-2.0-flash"
 }
+
+LOG_FILE = "triage_logs.jsonl"
 
 PHASES = [
     {"id": "IDENTIFICATION", "name": "Identificazione", "icon": "👤"},
@@ -564,6 +568,153 @@ class InputValidator:
         
         return True, red_flags
 
+# PARTE 2: Modulo Geolocalizzazione
+def haversine_distance(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
+    """
+    Calcola distanza Great Circle tra due coordinate (formula Haversine).
+    """
+    if not (-90 <= lat1 <= 90) or not (-90 <= lat2 <= 90):
+        raise ValueError(f"Latitude out of range: lat1={lat1}, lat2={lat2}")
+    if not (-180 <= lon1 <= 180) or not (-180 <= lon2 <= 180):
+        raise ValueError(f"Longitude out of range: lon1={lon1}, lon2={lon2}")
+    
+    R = 6371.0  # Raggio medio Terra (km)
+    phi1 = math.radians(lat1)
+    phi2 = math.radians(lat2)
+    delta_phi = math.radians(lat2 - lat1)
+    delta_lambda = math.radians(lon2 - lon1)
+    
+    a = (math.sin(delta_phi / 2) ** 2 +
+         math.cos(phi1) * math.cos(phi2) * math.sin(delta_lambda / 2) ** 2)
+    c = 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
+    
+    return R * c
+
+
+def find_nearest_facilities(
+    user_lat: float, user_lon: float,
+    facility_type: str = "pronto_soccorso",
+    max_results: int = 3, max_distance_km: float = 50.0
+) -> List[Dict]:
+    """
+    Trova strutture sanitarie più vicine da master_kb.json.
+    """
+    try:
+        with open("master_kb.json", 'r', encoding='utf-8') as f:
+            kb = json.load(f)
+    except FileNotFoundError:
+        logger.error("master_kb.json not found in root directory")
+        return []
+    except json.JSONDecodeError as e:
+        logger.error(f"master_kb.json invalid JSON: {e}")
+        return []
+    
+    facilities = kb.get(facility_type, [])
+    if not facilities:
+        logger.warning(f"No facilities found for type '{facility_type}'")
+        return []
+    
+    enriched = []
+    for facility in facilities:
+        try:
+            f_lat = float(facility.get('latitudine') or facility.get('lat', 0))
+            f_lon = float(facility.get('longitudine') or facility.get('lon', 0))
+            if f_lat == 0.0 and f_lon == 0.0:
+                continue
+            distance = haversine_distance(user_lat, user_lon, f_lat, f_lon)
+            if distance <= max_distance_km:
+                facility_copy = facility.copy()
+                facility_copy['distance_km'] = round(distance, 2)
+                enriched.append(facility_copy)
+        except (KeyError, ValueError, TypeError) as e:
+            logger.warning(f"Skipping facility: {e}")
+            continue
+    
+    enriched.sort(key=lambda x: x['distance_km'])
+    logger.info(f"Found {len(enriched)} facilities within {max_distance_km}km")
+    return enriched[:max_results]
+
+
+def estimate_eta(distance_km: float, area_type: str = "urban") -> Dict[str, float]:
+    """
+    Stima tempo di arrivo (ETA) basato su velocità medie.
+    """
+    TORTUOSITY_FACTOR = 1.3
+    SPEED_MAP = {"urban": 30.0, "suburban": 50.0, "rural": 70.0}
+    
+    real_distance = distance_km * TORTUOSITY_FACTOR
+    avg_speed = SPEED_MAP.get(area_type, 50.0)
+    duration_minutes = (real_distance / avg_speed) * 60
+    
+    return {
+        "duration_minutes": round(duration_minutes, 1),
+        "real_distance_km": round(real_distance, 2)
+    }
+
+
+def get_comune_coordinates(comune: str) -> Optional[Dict[str, float]]:
+    """
+    Ottiene coordinate geografiche di un comune ER.
+    """
+    COMUNI_COORDS = {
+        "bologna": {"lat": 44.4949, "lon": 11.3426},
+        "modena": {"lat": 44.6471, "lon": 10.9252},
+        "parma": {"lat": 44.8015, "lon": 10.3279},
+        "reggio emilia": {"lat": 44.6989, "lon": 10.6297},
+        "ferrara": {"lat": 44.8381, "lon": 11.6197},
+        "ravenna": {"lat": 44.4184, "lon": 12.2035},
+        "rimini": {"lat": 44.0678, "lon": 12.5695},
+        "forli": {"lat": 44.2225, "lon": 12.0408},
+        "forlì": {"lat": 44.2225, "lon": 12.0408},
+        "cesena": {"lat": 44.1396, "lon": 12.2431},
+        "piacenza": {"lat": 45.0526, "lon": 9.6924},
+        "imola": {"lat": 44.3534, "lon": 11.7142},
+        "carpi": {"lat": 44.7842, "lon": 10.8867},
+        "faenza": {"lat": 44.2858, "lon": 11.8814},
+        "lugo": {"lat": 44.4203, "lon": 11.9098},
+        "cervia": {"lat": 44.2619, "lon": 12.3476},
+        "riccione": {"lat": 43.9990, "lon": 12.6556},
+        "cattolica": {"lat": 43.9636, "lon": 12.7392},
+        "cento": {"lat": 44.7289, "lon": 11.2892},
+        "sassuolo": {"lat": 44.5433, "lon": 10.7844},
+        "casalecchio di reno": {"lat": 44.4816, "lon": 11.2783},
+        "san lazzaro di savena": {"lat": 44.4651, "lon": 11.4087},
+        "fidenza": {"lat": 44.8654, "lon": 10.0604},
+        "correggio": {"lat": 44.7713, "lon": 10.7803},
+        "formigine": {"lat": 44.5764, "lon": 10.8506}
+    }
+    
+    comune_normalized = comune.lower().strip()
+    coords = COMUNI_COORDS.get(comune_normalized)
+    
+    if coords:
+        logger.info(f"Coordinates found for '{comune}': {coords}")
+    else:
+        logger.warning(f"No coordinates for comune '{comune}'")
+    
+    return coords
+
+
+def get_area_type_from_comune(comune: str) -> str:
+    """
+    Determina tipo area (urban/suburban/rural) basato su comune.
+    """
+    urban_cities = [
+        "bologna", "modena", "parma", "reggio emilia", "ferrara",
+        "ravenna", "rimini", "forli", "forlì", "cesena", "piacenza"
+    ]
+    suburban_cities = [
+        "imola", "carpi", "sassuolo", "faenza", "lugo", "cervia",
+        "cesenatico", "riccione", "cattolica", "fidenza", "correggio"
+    ]
+    
+    comune_lower = comune.lower().strip()
+    if comune_lower in urban_cities:
+        return "urban"
+    elif comune_lower in suburban_cities:
+        return "suburban"
+    return "rural"
+
 # --- BACKEND SYNC (GDPR COMPLIANT) ---
 class BackendClient:
     def __init__(self):
@@ -637,16 +788,77 @@ class ModelOrchestrator:
     def is_available(self) -> bool:
         return self.groq_client is not None or self.gemini_model is not None
 
+    # PARTE 2: System Prompt con Schema JSON Vincolante
     def _get_system_prompt(self, phase: str, is_sensitive: bool) -> str:
+        """
+        Genera system prompt con schema JSON OBBLIGATORIO per ridurre allucinazioni.
+        """
         prompt = (
-            "Sei un assistente AI di Triage Sanitario Professionale. "
-            "REGOLA FONDAMENTALE: Non fornire MAI diagnosi mediche (es. 'Hai la polmonite'). "
-            "Il tuo compito è ESCLUSIVAMENTE raccogliere sintomi, valutare l'urgenza e orientare l'utente. "
-            "Poni UNA SOLA domanda alla volta. Rispondi SEMPRE in JSON. "
-            "Esempio: {\"testo\": \"...\", \"tipo_domanda\": \"survey\", \"opzioni\": [\"Sì\", \"No\"], \"metadata\": {\"area\": \"Trauma\", \"urgenza\": 2, \"sintomi_rilevati\": [\"dolore\"]}}\n"
+            "🚨 **REGOLA ASSOLUTA**: Rispondi SOLO con oggetto JSON valido.\n"
+            "❌ VIETATO: Testo prima/dopo JSON, spiegazioni, note.\n\n"
+            
+            "📋 **SCHEMA JSON OBBLIGATORIO**:\n"
+            "```json\n"
+            "{\n"
+            '  "testo": "Domanda in italiano (max 200 char)",\n'
+            '  "tipo_domanda": "survey" | "scale" | "text",\n'
+            '  "opzioni": ["Opzione1", "Opzione2", "Opzione3"] | null,\n'
+            '  "metadata": {\n'
+            '    "urgenza": 1 | 2 | 3 | 4 | 5,\n'
+            '    "area": "Trauma" | "Medica" | "Cardiologica" | "Neurologica" | "Pediatrica" | "Psichiatrica",\n'
+            '    "red_flags": ["flag1", "flag2"] | [],\n'
+            '    "confidence": 0.0-1.0\n'
+            '  }\n'
+            "}\n"
+            "```\n\n"
+            
+            "📌 **REGOLE TIPO_DOMANDA**:\n"
+            '- "survey" → opzioni DEVE essere array [min 2, max 5 elementi]\n'
+            '- "scale" → chiedi numero (es. "1-10"), opzioni = null\n'
+            '- "text" → input libero, opzioni = null\n\n'
+            
+            "📊 **SCALA URGENZA** (obbligatorio, no 0):\n"
+            "1 = Non urgente (follow-up giorni)\n"
+            "2 = Bassa (valutazione 24-48h)\n"
+            "3 = Moderata (valutazione stessa giornata)\n"
+            "4 = Alta (Pronto Soccorso entro 2h)\n"
+            "5 = Critica (118 immediato)\n"
+            "⚠️ Se incerto → usa urgenza=3, confidence=0.5\n\n"
+            
+            "❌ **DIVIETI ASSOLUTI**:\n"
+            "- NON diagnosticare ('Hai la polmonite' → VIETATO)\n"
+            "- NON prescrivere farmaci\n"
+            "- NON dare certezze ('È sicuramente...' → VIETATO)\n"
+            "- Ruolo: SOLO raccolta info + valutazione urgenza\n\n"
+            
+            "✅ **ESEMPIO VALIDO**:\n"
+            '{"testo": "Il dolore si irradia al braccio sinistro?", '
+            '"tipo_domanda": "survey", '
+            '"opzioni": ["Sì", "No", "Non so"], '
+            '"metadata": {"urgenza": 4, "area": "Cardiologica", "red_flags": ["dolore_toracico"], "confidence": 0.85}}\n\n'
         )
+        
         if is_sensitive:
-            prompt += " EMERGENZA: Dinamica sensibile rilevata. Sii estremamente protettivo e sintetico."
+            prompt += (
+                "⚠️ **MODALITÀ EMERGENZA**:\n"
+                "- Rilevato contenuto sensibile\n"
+                "- MAX 2 domande essenziali\n"
+                "- Se confermato rischio → urgenza=5\n"
+                "- Tono empatico ma conciso\n\n"
+            )
+        
+        phase_map = {
+            "LOCATION": "Chiedi SOLO comune. Se fuori ER → chiedi comune ER più vicino.",
+            "CHIEF_COMPLAINT": "Un sintomo principale. Max 5 opzioni + 'Altro'.",
+            "PAIN_SCALE": "Intensità 1-10. Tipo 'scale', opzioni=null.",
+            "RED_FLAGS": "Domande Sì/No: dispnea, dolore torace, confusione, emorragia.",
+            "ANAMNESIS": "Una domanda: età O farmaci O allergie O patologie.",
+            "DISPOSITION": "NON chiedere. Riassumi e raccomanda (CAU/PS/Medico Base)."
+        }
+        
+        if phase in phase_map:
+            prompt += f"🎯 **FASE {phase}**: {phase_map[phase]}\n"
+        
         return prompt
 
     def call_ai(self, messages: List[Dict], phase: str) -> Generator[Union[str, Dict], None, None]:
@@ -691,16 +903,106 @@ class ModelOrchestrator:
             except Exception as e:
                 logger.error(f"Gemini Fallback Error: {e}")
 
+        # PARTE 2: Retry Loop con Schema Validation
         if not success:
             fail_msg = {"testo": "Servizio AI momentaneamente non disponibile. Chiamare il 118 in caso di urgenza.", "metadata": {"error": True}}
             yield fail_msg
             return
 
-        final_data = JSONExtractor.extract(full_response)
+        final_data = None
+        max_retries = 2
+        
+        for attempt in range(max_retries):
+            final_data = JSONExtractor.extract(full_response)
+            
+            # Validazione schema JSON
+            if final_data and isinstance(final_data, dict):
+                # Clamp urgenza 1-5
+                metadata = final_data.get("metadata", {})
+                if "urgenza" in metadata:
+                    urgenza = metadata["urgenza"]
+                    if isinstance(urgenza, (int, float)):
+                        metadata["urgenza"] = max(1, min(5, int(urgenza)))
+                    else:
+                        metadata["urgenza"] = 3
+                else:
+                    metadata["urgenza"] = 3
+                
+                # Clamp confidence 0-1
+                if "confidence" in metadata:
+                    confidence = metadata["confidence"]
+                    if isinstance(confidence, (int, float)):
+                        metadata["confidence"] = max(0.0, min(1.0, float(confidence)))
+                    else:
+                        metadata["confidence"] = 0.5
+                else:
+                    metadata["confidence"] = 0.5
+                
+                final_data["metadata"] = metadata
+                
+                # Valida opzioni per tipo_domanda
+                tipo = final_data.get("tipo_domanda", "text")
+                opzioni = final_data.get("opzioni")
+                
+                if tipo == "survey" and (not opzioni or not isinstance(opzioni, list) or len(opzioni) < 2):
+                    logger.warning(f"Invalid survey options on attempt {attempt + 1}, retrying...")
+                    if attempt < max_retries - 1:
+                        continue
+                    # Fallback su ultimo tentativo
+                    logger.error("AI retry exhausted, using fallback options")
+                    try:
+                        current_step = st.session_state.current_step
+                        final_data["opzioni"] = get_fallback_options(current_step)
+                        final_data["metadata"]["fallback_used"] = True
+                    except:
+                        final_data["opzioni"] = ["Sì", "No", "Non so"]
+                
+                # Schema valido, esci dal loop
+                break
+            else:
+                logger.warning(f"JSON extraction failed on attempt {attempt + 1}")
+                if attempt < max_retries - 1:
+                    continue
+                # Fallback finale
+                final_data = {"testo": full_response, "tipo_domanda": "text", "opzioni": None, "metadata": {"urgenza": 3, "confidence": 0.5}}
+                break
+        
         if not final_data:
-            final_data = {"testo": full_response, "tipo_domanda": "text", "opzioni": None, "metadata": {}}
+            final_data = {"testo": full_response, "tipo_domanda": "text", "opzioni": None, "metadata": {"urgenza": 3, "confidence": 0.5}}
         
         yield final_data
+
+
+# PARTE 2: Opzioni Fallback Predefinite (non arbitrarie)
+def get_fallback_options(step: TriageStep) -> List[str]:
+    """
+    Restituisce opzioni predefinite per step se AI fallisce.
+    """
+    FALLBACK_MAP = {
+        TriageStep.LOCATION: [
+            "Bologna", "Modena", "Parma", "Reggio Emilia",
+            "Ferrara", "Ravenna", "Rimini", "Altro comune ER"
+        ],
+        TriageStep.CHIEF_COMPLAINT: [
+            "Dolore", "Febbre", "Trauma/Caduta",
+            "Difficoltà respiratorie", "Problemi gastrointestinali", "Altro sintomo"
+        ],
+        TriageStep.PAIN_SCALE: [
+            "1-3 (Lieve/Sopportabile)", "4-6 (Moderato)",
+            "7-8 (Forte)", "9-10 (Insopportabile)", "Nessun dolore"
+        ],
+        TriageStep.RED_FLAGS: [
+            "Sì, ho sintomi gravi", "No, nessun sintomo preoccupante", "Non sono sicuro/a"
+        ],
+        TriageStep.ANAMNESIS: [
+            "Fornisco informazioni", "Preferisco non rispondere", "Non applicabile"
+        ],
+        TriageStep.DISPOSITION: ["Mostra raccomandazione finale"]
+    }
+    
+    options = FALLBACK_MAP.get(step, ["Continua", "Annulla"])
+    logger.info(f"Fallback options for {step.name}: {len(options)} choices")
+    return options
 
 # --- UI COMPONENTS ---
 def render_header(current_phase):
@@ -734,26 +1036,92 @@ def render_sidebar(pharmacy_db):
         st.markdown(f"**Specializzazione Backend:** `{st.session_state.specialization}`")
         st.progress((st.session_state.current_phase_idx + 1) / len(PHASES))
         
-        with st.expander("📍 Farmacie & Logistica"):
-            comune = st.text_input("Inserisci Comune:", key="pharm_search", placeholder="es. Roma")
-            h24 = st.checkbox("Solo H24")
-            if comune:
-                farms = pharmacy_db.get_pharmacies(comune)
-                if h24: farms = [f for f in farms if f.get("H24")]
-                
-                if farms:
-                    center_lat = farms[0].get("lat", 41.90)
-                    center_lon = farms[0].get("lon", 12.49)
-                    m = folium.Map(location=[center_lat, center_lon], zoom_start=13)
-                    for f in farms:
-                        folium.Marker(
-                            [f.get("lat"), f.get("lon")],
-                            popup=f"{f['nome']}\n{f.get('indirizzo', '')}",
-                            icon=folium.Icon(color="red" if f.get("H24") else "blue", icon="plus", prefix="fa")
-                        ).add_to(m)
-                    st_folium(m, height=250, width=250)
+        # PARTE 2: Expander Strutture Sanitarie Vicine con Geolocalizzazione
+        with st.expander("📍 Strutture Sanitarie Vicine"):
+            comune_input = st.text_input("Inserisci Comune:", key="geo_comune", placeholder="es. Bologna")
+            
+            facility_type_map = {
+                "Pronto Soccorso": "pronto_soccorso",
+                "CAU (Continuità Assistenziale)": "cau",
+                "Guardia Medica": "guardia_medica",
+                "Farmacie": "farmacie"
+            }
+            facility_label = st.selectbox("Tipo struttura:", list(facility_type_map.keys()), key="facility_type_select")
+            facility_type = facility_type_map[facility_label]
+            
+            col1, col2 = st.columns(2)
+            max_distance = col1.slider("Raggio massimo (km)", 5, 100, 50, key="max_dist_slider")
+            max_results = col2.slider("Max risultati", 1, 10, 3, key="max_results_slider")
+            
+            if st.button("🔍 Cerca Strutture", use_container_width=True):
+                if comune_input:
+                    coords = get_comune_coordinates(comune_input)
+                    if coords:
+                        user_lat = coords["lat"]
+                        user_lon = coords["lon"]
+                        
+                        facilities = find_nearest_facilities(
+                            user_lat, user_lon,
+                            facility_type=facility_type,
+                            max_results=max_results,
+                            max_distance_km=max_distance
+                        )
+                        
+                        if facilities:
+                            st.success(f"✅ Trovate {len(facilities)} strutture")
+                            
+                            area_type = get_area_type_from_comune(comune_input)
+                            
+                            # Mostra card risultati
+                            for idx, facility in enumerate(facilities, 1):
+                                distance = facility.get('distance_km', 0)
+                                eta = estimate_eta(distance, area_type)
+                                
+                                with st.container():
+                                    st.markdown(f"**{idx}. {facility.get('nome', 'N/D')}**")
+                                    st.markdown(f"📍 {facility.get('indirizzo', 'N/D')} - {facility.get('comune', 'N/D')}")
+                                    st.markdown(f"📞 {facility.get('telefono', 'N/D')}")
+                                    if facility.get('orari'):
+                                        st.markdown(f"🕒 {facility['orari']}")
+                                    if facility.get('H24'):
+                                        st.markdown("🟢 **Aperto H24**")
+                                    st.markdown(f"🚗 Distanza: **{distance} km** - ETA: **~{eta['duration_minutes']} min**")
+                                    st.divider()
+                            
+                            # Mappa Folium
+                            m = folium.Map(location=[user_lat, user_lon], zoom_start=11)
+                            
+                            # Marker utente (blu)
+                            folium.Marker(
+                                [user_lat, user_lon],
+                                popup=f"📍 La tua posizione<br>{comune_input}",
+                                icon=folium.Icon(color="blue", icon="home", prefix="fa")
+                            ).add_to(m)
+                            
+                            # Marker strutture (rosso)
+                            for facility in facilities:
+                                f_lat = facility.get('latitudine') or facility.get('lat')
+                                f_lon = facility.get('longitudine') or facility.get('lon')
+                                if f_lat and f_lon:
+                                    popup_text = (
+                                        f"<b>{facility.get('nome', 'N/D')}</b><br>"
+                                        f"{facility.get('indirizzo', 'N/D')}<br>"
+                                        f"📞 {facility.get('telefono', 'N/D')}<br>"
+                                        f"🚗 {facility.get('distance_km', 0)} km"
+                                    )
+                                    folium.Marker(
+                                        [f_lat, f_lon],
+                                        popup=folium.Popup(popup_text, max_width=300),
+                                        icon=folium.Icon(color="red", icon="plus", prefix="fa")
+                                    ).add_to(m)
+                            
+                            st_folium(m, height=400, width=700)
+                        else:
+                            st.warning(f"⚠️ Nessuna struttura trovata entro {max_distance}km da {comune_input}")
+                    else:
+                        st.error(f"❌ Comune '{comune_input}' non riconosciuto. Usa comuni dell'Emilia-Romagna.")
                 else:
-                    st.write("Nessun dato logistico trovato.")
+                    st.warning("⚠️ Inserisci un comune per iniziare la ricerca")
 
 def render_disclaimer():
     st.markdown("""
@@ -879,6 +1247,81 @@ def advance_step() -> bool:
     return True
 
 
+# PARTE 2: Logging Strutturato per Backend Analytics
+def save_structured_log():
+    """
+    Salva log sessione in formato strutturato JSON per analytics.
+    Schema version "2.0" per distinguere dal vecchio formato.
+    """
+    if not st.session_state.get("gdpr_consent", False):
+        logger.info("Skipping log save: GDPR consent not given")
+        return
+    
+    try:
+        session_end = datetime.now()
+        session_start = st.session_state.session_start
+        total_duration = (session_end - session_start).total_seconds()
+        
+        steps_data = []
+        for step in TriageStep:
+            step_name = step.name
+            if step_name in st.session_state.step_timestamps:
+                ts_data = st.session_state.step_timestamps[step_name]
+                duration = (ts_data['end'] - ts_data['start']).total_seconds()
+                steps_data.append({
+                    "step_name": step_name,
+                    "duration_seconds": round(duration, 2),
+                    "data_collected": st.session_state.collected_data.get(step_name),
+                    "timestamp_start": ts_data['start'].isoformat(),
+                    "timestamp_end": ts_data['end'].isoformat()
+                })
+        
+        clinical_summary = {
+            "chief_complaint": st.session_state.collected_data.get('CHIEF_COMPLAINT'),
+            "pain_severity": st.session_state.collected_data.get('PAIN_SCALE'),
+            "red_flags": st.session_state.collected_data.get('RED_FLAGS', []),
+            "age": st.session_state.collected_data.get('age'),
+            "location": st.session_state.collected_data.get('LOCATION')
+        }
+        
+        disposition_data = st.session_state.collected_data.get('DISPOSITION', {})
+        outcome = {
+            "disposition": disposition_data.get('type', 'Non Completato'),
+            "urgency_level": disposition_data.get('urgency', 0),
+            "facility_recommended": disposition_data.get('facility_name'),
+            "distance_km": disposition_data.get('distance'),
+            "eta_minutes": disposition_data.get('eta')
+        }
+        
+        metadata = {
+            "specialization": st.session_state.specialization,
+            "emergency_triggered": st.session_state.emergency_level is not None,
+            "emergency_level": st.session_state.emergency_level.name if st.session_state.emergency_level else None,
+            "ai_fallback_used": any("fallback" in str(m) for m in st.session_state.metadata_history),
+            "total_messages": len(st.session_state.messages)
+        }
+        
+        log_entry = {
+            "session_id": st.session_state.session_id,
+            "timestamp_start": session_start.isoformat(),
+            "timestamp_end": session_end.isoformat(),
+            "total_duration_seconds": round(total_duration, 2),
+            "steps": steps_data,
+            "clinical_summary": clinical_summary,
+            "outcome": outcome,
+            "metadata": metadata,
+            "version": "2.0"
+        }
+        
+        with open(LOG_FILE, 'a', encoding='utf-8') as f:
+            f.write(json.dumps(log_entry, ensure_ascii=False) + '\n')
+        
+        logger.info(f"Structured log saved: session={st.session_state.session_id}")
+    
+    except Exception as e:
+        logger.error(f"Failed to save structured log: {e}", exc_info=True)
+
+
 def get_step_display_name(step: TriageStep) -> str:
     """
     Ottiene nome human-readable per step.
@@ -934,6 +1377,12 @@ def main():
     for m in st.session_state.messages:
         with st.chat_message(m["role"]):
             st.markdown(m["content"])
+    
+    # PARTE 2: Salvataggio log strutturato se DISPOSITION completato
+    if st.session_state.current_step == TriageStep.DISPOSITION and \
+       st.session_state.step_completed.get(TriageStep.DISPOSITION, False):
+        save_structured_log()
+        st.success("✅ Triage completato. Dati salvati per analisi sanitaria.")
 
     if not st.session_state.pending_survey:
         if raw_input := st.chat_input("Descrivi i sintomi..."):

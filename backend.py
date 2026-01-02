@@ -162,15 +162,61 @@ class TriageDataStore:
             return
         
         with open(self.filepath, 'r', encoding='utf-8') as f:
-            for line in f:
+            for line_num, line in enumerate(f, 1):
                 line = line.strip()
                 if not line:
                     continue
                 try:
                     record = json.loads(line)
-                    self.records.append(record)
-                except json.JSONDecodeError:
+                    # PARTE 2: Supporto formato v2.0
+                    if record.get('version') == "2.0":
+                        normalized = self._normalize_structured_log(record)
+                        self.records.extend(normalized)
+                    else:
+                        self.records.append(record)
+                except json.JSONDecodeError as e:
                     continue
+    
+    # PARTE 2: Normalizzazione Log Strutturati v2.0
+    def _normalize_structured_log(self, structured: Dict) -> List[Dict]:
+        """
+        Converte log v2.0 in formato compatibile con analytics esistente.
+        """
+        session_id = structured.get('session_id')
+        clinical = structured.get('clinical_summary', {})
+        outcome = structured.get('outcome', {})
+        metadata = structured.get('metadata', {})
+        
+        normalized_record = {
+            'session_id': session_id,
+            'timestamp': structured.get('timestamp_start'),
+            'total_duration': structured.get('total_duration_seconds', 0),
+            'user_input': f"Sintomo: {clinical.get('chief_complaint', 'N/D')}",
+            'bot_response': f"Esito: {outcome.get('disposition', 'N/D')}",
+            'city_detected': clinical.get('location', 'N/D'),
+            'triage_outcome': outcome.get('disposition', 'Non Completato'),
+            'age': clinical.get('age'),
+            'pain_scale': clinical.get('pain_severity'),
+            'red_flags': clinical.get('red_flags', []),
+            'urgenza': outcome.get('urgency_level', 3),
+            'distretto': clinical.get('location', 'Non Specificato'),
+            'is_structured_log': True,
+            'emergency_triggered': metadata.get('emergency_triggered', False),
+            'steps_completed': len(structured.get('steps', [])),
+            'total_messages': metadata.get('total_messages', 0)
+        }
+        
+        dt = parse_timestamp_robust(structured.get('timestamp_start'))
+        if dt:
+            normalized_record['datetime'] = dt
+            normalized_record['date'] = dt.date()
+            normalized_record['hour'] = dt.hour
+            normalized_record['week'] = dt.isocalendar()[1]
+            normalized_record['year'] = dt.year
+            normalized_record['day_of_week'] = dt.weekday()
+        
+        return [normalized_record]
+
     
     def _enrich_data(self):
         """Arricchisce i dati con analisi NLP"""

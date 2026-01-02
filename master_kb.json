@@ -1,0 +1,154 @@
+{
+  "pronto_soccorso": [
+    {
+      "nome": "Ospedale Maggiore - Bologna",
+      "indirizzo": "Largo Bartolo Nigrisoli, 2",
+      "comune": "Bologna",
+      "latitudine": 44.4949,
+      "longitudine": 11.3426,
+      "telefono": "051 6478111",
+      "H24": true
+    },
+    {
+      "nome": "Policlinico Sant'Orsola - Bologna",
+      "indirizzo": "Via Giuseppe Massarenti, 9",
+      "comune": "Bologna",
+      "latitudine": 44.4911,
+      "longitudine": 11.3519,
+      "telefono": "051 6361111",
+      "H24": true
+    },
+    {
+      "nome": "Ospedale di Modena",
+      "indirizzo": "Via del Pozzo, 71",
+      "comune": "Modena",
+      "latitudine": 44.6471,
+      "longitudine": 10.9252,
+      "telefono": "059 4222111",
+      "H24": true
+    },
+    {
+      "nome": "Ospedale Maggiore - Parma",
+      "indirizzo": "Via Gramsci, 14",
+      "comune": "Parma",
+      "latitudine": 44.8015,
+      "longitudine": 10.3279,
+      "telefono": "0521 702111",
+      "H24": true
+    },
+    {
+      "nome": "Arcispedale Sant'Anna - Ferrara",
+      "indirizzo": "Via Aldo Moro, 8",
+      "comune": "Ferrara",
+      "latitudine": 44.8381,
+      "longitudine": 11.6197,
+      "telefono": "0532 236111",
+      "H24": true
+    },
+    {
+      "nome": "Ospedale Santa Maria delle Croci - Ravenna",
+      "indirizzo": "Viale Randi, 5",
+      "comune": "Ravenna",
+      "latitudine": 44.4184,
+      "longitudine": 12.2035,
+      "telefono": "0544 285111",
+      "H24": true
+    },
+    {
+      "nome": "Ospedale Infermi - Rimini",
+      "indirizzo": "Via Settembrini, 2",
+      "comune": "Rimini",
+      "latitudine": 44.0678,
+      "longitudine": 12.5695,
+      "telefono": "0541 705111",
+      "H24": true
+    },
+    {
+      "nome": "Ospedale Bufalini - Cesena",
+      "indirizzo": "Viale Ghirotti, 286",
+      "comune": "Cesena",
+      "latitudine": 44.1396,
+      "longitudine": 12.2431,
+      "telefono": "0547 352111",
+      "H24": true
+    }
+  ],
+  "cau": [
+    {
+      "nome": "CAU Bologna Navile",
+      "indirizzo": "Via della Battaglia, 10",
+      "comune": "Bologna",
+      "latitudine": 44.5138,
+      "longitudine": 11.3361,
+      "telefono": "051 6478500",
+      "orari": "8:00-20:00 feriali"
+    },
+    {
+      "nome": "CAU Modena Centro",
+      "indirizzo": "Via del Pozzo, 71",
+      "comune": "Modena",
+      "latitudine": 44.6471,
+      "longitudine": 10.9252,
+      "telefono": "059 4225000",
+      "orari": "8:00-20:00 feriali"
+    },
+    {
+      "nome": "CAU Parma Cittadella",
+      "indirizzo": "Via La Spezia, 34",
+      "comune": "Parma",
+      "latitudine": 44.8015,
+      "longitudine": 10.3279,
+      "telefono": "0521 393900",
+      "orari": "8:00-20:00 feriali"
+    }
+  ],
+  "guardia_medica": [
+    {
+      "nome": "Guardia Medica Bologna Centro",
+      "indirizzo": "Via Gramsci, 12",
+      "comune": "Bologna",
+      "latitudine": 44.4949,
+      "longitudine": 11.3426,
+      "telefono": "116117",
+      "orari": "20:00-8:00 feriali, H24 festivi"
+    },
+    {
+      "nome": "Guardia Medica Modena",
+      "indirizzo": "Via del Pozzo, 71",
+      "comune": "Modena",
+      "latitudine": 44.6471,
+      "longitudine": 10.9252,
+      "telefono": "116117",
+      "orari": "20:00-8:00 feriali, H24 festivi"
+    }
+  ],
+  "farmacie": [
+    {
+      "nome": "Farmacia Comunale Bologna Centro",
+      "indirizzo": "Piazza Maggiore, 6",
+      "comune": "Bologna",
+      "lat": 44.4938,
+      "lon": 11.3428,
+      "telefono": "051 239690",
+      "H24": true
+    },
+    {
+      "nome": "Farmacia Stazione Bologna",
+      "indirizzo": "Piazza delle Medaglie d'Oro, 2/C",
+      "comune": "Bologna",
+      "lat": 44.5056,
+      "lon": 11.3432,
+      "telefono": "051 246802",
+      "H24": true
+    },
+    {
+      "nome": "Farmacia Modena Centro",
+      "indirizzo": "Via Emilia Centro, 25",
+      "comune": "Modena",
+      "lat": 44.6471,
+      "lon": 10.9252,
+      "telefono": "059 222155",
+      "H24": false
+    }
+  ]
+}
