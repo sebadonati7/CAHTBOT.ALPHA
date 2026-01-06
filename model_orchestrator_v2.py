@@ -268,14 +268,23 @@ class ModelOrchestrator:
                     )
                     return bool(response.choices[0].message.content)
                 
-                loop = asyncio.new_event_loop()
-                asyncio.set_event_loop(loop)
-                result = loop.run_until_complete(_test())
-                loop.close()
-                
-                if result:
-                    logging.info("✅ Groq connectivity test passed")
-                    return True
+                # Use asyncio.run() for cleaner async execution
+                try:
+                    result = asyncio.run(_test())
+                    if result:
+                        logging.info("✅ Groq connectivity test passed")
+                        return True
+                except RuntimeError:
+                    # If there's already an event loop, fall back to manual loop creation
+                    loop = asyncio.new_event_loop()
+                    asyncio.set_event_loop(loop)
+                    try:
+                        result = loop.run_until_complete(_test())
+                        if result:
+                            logging.info("✅ Groq connectivity test passed")
+                            return True
+                    finally:
+                        loop.close()
                     
             except Exception as e:
                 logging.warning(f"⚠️ Groq test failed: {e}")
