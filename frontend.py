@@ -7,20 +7,21 @@ import logging
 import random
 import re
 import requests
-from datetime import datetime
-# PARTE 1: Import per State Machine
-from typing import List, Dict, Any, Optional, Union, Generator, Tuple
-from enum import Enum
-# PARTE 2: Import per calcoli geospaziali
 import math
+import difflib  # Aggiunta per il matching dei comuni
+from datetime import datetime
+
+# --- TIPIZZAZIONE E STRUTTURE DATI ---
+from typing import List, Dict, Any, Optional, Union, Generator, Tuple, Callable
+from enum import Enum
+
+# --- GESTIONE RETE E API ---
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 import groq
-import google.generativeai as genai
-import folium
-from streamlit_folium import st_folium
 
-# --- CONFIGURAZIONE LOGGING E PAGINA ---
+# --- CONFIGURAZIONE LOGGING E AMBIENTE ---
+# (Qui puoi procedere con la configurazione del logging o della pagina Streamlit)
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
@@ -68,7 +69,35 @@ PHASES = [
     {"id": "LOGISTICS", "name": "Supporto Territoriale", "icon": "📍"},
     {"id": "DISPOSITION", "name": "Conclusione Triage", "icon": "🏥"}
 ]
+# --- CARICAMENTO DATASET COMUNI EMILIA-ROMAGNA ---
+def load_comuni_er(filepath="mappa_er.json"):
+    try:
+        with open(filepath, "r", encoding="utf-8") as f:
+            data = json.load(f)
+            geoms = data.get("objects", {}).get("comuni", {}).get("geometries", [])
+            return {g["properties"]["name"].lower().strip() for g in geoms if "name" in g["properties"]}
+    except Exception as e:
+        logger.error(f"Errore caricamento mappa: {e}")
+        return {"bologna", "modena", "parma", "reggio emilia", "ferrara", "ravenna", "rimini", "forlì", "piacenza", "cesena"}
 
+COMUNI_ER_VALIDI = load_comuni_er()
+
+def is_valid_comune_er(comune: str) -> bool:
+    if not comune or not isinstance(comune, str):
+        return False
+    
+    nome = comune.lower().strip()
+    
+    if nome in COMUNI_ER_VALIDI:
+        return True
+    
+    # Controllo intelligente per accenti e piccoli refusi
+    matches = difflib.get_close_matches(nome, list(COMUNI_ER_VALIDI), n=1, cutoff=0.8)
+    return len(matches) > 0
+
+
+
+# ============================================
 # PARTE 1: Definizione Stati del Triage
 class TriageStep(Enum):
     """
@@ -197,106 +226,78 @@ def assess_emergency_level(user_input: str, metadata: Dict) -> Optional[Emergenc
 
 def render_emergency_overlay(level: EmergencyLevel):
     """
-    Mostra UI specifica per livello emergenza (azione NON arbitraria).
-    
-    Args:
-        level: Livello di emergenza rilevato
-    
-    Side Effects:
-        - RED: Blocca completamente l'applicazione con overlay, chiama st.stop()
-        - BLACK: Mostra panel supporto psicologico persistente
-        - ORANGE: Mostra banner warning con raccomandazione PS
+    Mostra un'interfaccia di avviso non bloccante per emergenze RED, ORANGE o BLACK.
+    Unifica la gestione delle urgenze mediche e del supporto psicologico.
     """
-    rule = EMERGENCY_RULES[level]
+    rule = EMERGENCY_RULES.get(level, {"message": "Si consiglia cautela."})
     
-    if level == EmergencyLevel.RED:
-        # COMPORTAMENTO RED: Overlay fullscreen BLOCCANTE
+    # --- CASO 1: URGENZA MEDICA (RED o ORANGE) ---
+    if level in [EmergencyLevel.RED, EmergencyLevel.ORANGE]:
+        is_red = (level == EmergencyLevel.RED)
+        
+        # Configurazione UI dinamica
+        config = {
+            EmergencyLevel.RED: {
+                "color": "#dc2626", "icon": "🚨", 
+                "title": "Suggerimento di Urgenza Critica",
+                "advice": f"In base ai sintomi ({rule['message']}), ti suggeriamo di **contattare il 118** immediatamente.",
+                "btn_label": "📞 CHIAMA 118 ORA", "btn_link": "tel:118"
+            },
+            EmergencyLevel.ORANGE: {
+                "color": "#f97316", "icon": "⚠️", 
+                "title": "Suggerimento di Urgenza",
+                "advice": f"La tua situazione ({rule['message']}) suggerisce l'opportunità di una valutazione in **Pronto Soccorso**.",
+                "btn_label": "🏥 TROVA PRONTO SOCCORSO",
+                "btn_link": f"https://www.google.com/maps/search/pronto+soccorso+{st.session_state.get('collected_data', {}).get('location', '')}".strip()
+            }
+        }
+        
+        cfg = config[level]
+
+        # Rendering del Box di Avviso
         st.markdown(f"""
-        <div style='position: fixed; top: 0; left: 0; width: 100%; height: 100%; 
-                    background: rgba(220, 38, 38, 0.97); z-index: 9999;
-                    display: flex; align-items: center; justify-content: center;
-                    backdrop-filter: blur(10px);'>
-            <div style='background: white; padding: 50px; border-radius: 20px; 
-                        text-align: center; max-width: 600px; box-shadow: 0 25px 50px rgba(0,0,0,0.5);'>
-                <h1 style='color: #dc2626; font-size: 3em; margin: 0 0 20px 0;'>🚨</h1>
-                <h2 style='color: #dc2626; margin: 0 0 15px 0;'>EMERGENZA MEDICA</h2>
-                <p style='font-size: 1.3em; margin: 20px 0; color: #374151; line-height: 1.6;'>
-                    {rule['message']}
-                </p>
-                <p style='font-size: 1.1em; margin: 20px 0; color: #6b7280;'>
-                    Questa applicazione <strong>non può sostituire</strong> l'intervento medico immediato.
-                </p>
-                <a href='tel:118' 
-                   style='display: inline-block; background: #dc2626; color: white; 
-                          padding: 25px 50px; text-decoration: none; border-radius: 15px; 
-                          font-size: 2em; font-weight: bold; margin-top: 20px;
-                          box-shadow: 0 10px 25px rgba(220, 38, 38, 0.5);
-                          transition: transform 0.2s;'
-                   onmouseover='this.style.transform="scale(1.05)"'
-                   onmouseout='this.style.transform="scale(1)"'>
-                    📞 CHIAMA 118 ORA
-                </a>
-                <p style='margin-top: 30px; font-size: 0.9em; color: #9ca3af;'>
-                    Servizio attivo 24/7 - Chiamata gratuita
+            <div style='border-left: 10px solid {cfg['color']}; background: white; padding: 25px; 
+                        border-radius: 15px; box-shadow: 0 10px 25px rgba(0,0,0,0.1); margin: 20px 0;'>
+                <div style='display: flex; align-items: center; margin-bottom: 15px;'>
+                    <span style='font-size: 2.5em; margin-right: 20px;'>{cfg['icon']}</span>
+                    <h3 style='color: {cfg['color']}; margin: 0;'>{cfg['title']}</h3>
+                </div>
+                <p style='font-size: 1.15em; color: #1f2937; line-height: 1.6;'>{cfg['advice']}</p>
+                <hr style='margin: 15px 0; border: 0; border-top: 1px solid #eee;'>
+                <p style='font-size: 0.85em; color: #6b7280; font-style: italic;'>
+                    Questo è un assistente digitale. Non sostituisce un parere medico professionale. 
+                    Puoi proseguire la conversazione per fornire ulteriori dettagli.
                 </p>
             </div>
-        </div>
         """, unsafe_allow_html=True)
-        
-        # BLOCCA esecuzione applicazione
-        logger.critical(f"Application stopped: RED emergency overlay displayed")
-        st.stop()
-    
+
+        # Pulsanti d'azione
+        col_btn, col_info = st.columns([1, 1])
+        with col_btn:
+            st.link_button(cfg['btn_label'], cfg['btn_link'], type="primary", use_container_width=True)
+        with col_info:
+            st.info("La conversazione rimane attiva se desideri scrivermi altro.")
+
+        logger.info(f"Visualizzato alert {level.name}")
+
+    # --- CASO 2: SUPPORTO PSICOLOGICO (BLACK) ---
     elif level == EmergencyLevel.BLACK:
-        # COMPORTAMENTO BLACK: Panel supporto psicologico (NON bloccante)
         st.markdown(f"""
-        <div style='background: linear-gradient(135deg, #7c3aed 0%, #5b21b6 100%); 
-                    color: white; padding: 35px; border-radius: 20px; margin: 25px 0;
-                    box-shadow: 0 15px 35px rgba(124, 58, 237, 0.4);'>
-            <h2 style='margin: 0 0 20px 0; font-size: 2em;'>🆘 Non sei solo/a</h2>
-            <p style='font-size: 1.2em; margin-bottom: 25px; line-height: 1.6;'>
-                {rule['message']}
-            </p>
-            <div style='background: rgba(255, 255, 255, 0.95); color: #1f2937; 
-                        padding: 25px; border-radius: 15px; margin-top: 20px;'>
-                <h3 style='margin: 0 0 15px 0; color: #7c3aed;'>📞 Contatti Supporto Immediato</h3>
-                <div style='font-size: 1.1em; line-height: 2;'>
-                    <strong>Telefono Amico Italia:</strong> 
-                    <a href='tel:02-2327-2327' style='color: #7c3aed; font-weight: bold;'>02 2327 2327</a>
-                    <span style='color: #6b7280;'> (tutti i giorni 10-24)</span>
-                    <br>
-                    <strong>Numero Antiviolenza:</strong> 
-                    <a href='tel:1522' style='color: #7c3aed; font-weight: bold;'>1522</a>
-                    <span style='color: #6b7280;'> (24/7, anche WhatsApp)</span>
-                    <br>
-                    <strong>Samaritans Onlus:</strong> 
-                    <a href='tel:800-86-00-22' style='color: #7c3aed; font-weight: bold;'>800 86 00 22</a>
-                    <span style='color: #6b7280;'> (24/7)</span>
-                    <br>
-                    <strong>Chat Online:</strong> 
-                    <a href='https://www.telefonoamico.it' target='_blank' 
-                       style='color: #7c3aed; font-weight: bold;'>www.telefonoamico.it</a>
+            <div style='background: linear-gradient(135deg, #7c3aed 0%, #5b21b6 100%); 
+                        color: white; padding: 35px; border-radius: 20px; margin: 25px 0;'>
+                <h2 style='margin: 0 0 20px 0;'>🆘 Non sei solo/a</h2>
+                <p style='font-size: 1.2em; margin-bottom: 25px;'>{rule['message']}</p>
+                <div style='background: white; color: #1f2937; padding: 25px; border-radius: 15px;'>
+                    <h4 style='color: #7c3aed; margin-top: 0;'>Contatti di supporto immediato:</h4>
+                    <ul style='list-style: none; padding: 0; line-height: 2;'>
+                        <li><strong>Telefono Amico:</strong> <a href='tel:0223272327'>02 2327 2327</a></li>
+                        <li><strong>Numero Antiviolenza:</strong> <a href='tel:1522'>1522</a></li>
+                        <li><strong>Samaritans:</strong> <a href='tel:800860022'>800 86 00 22</a></li>
+                    </ul>
                 </div>
             </div>
-            <p style='margin-top: 25px; font-size: 0.95em; font-style: italic; opacity: 0.9;'>
-                💬 Puoi continuare la conversazione qui sotto, ma ti consigliamo di contattare 
-                uno dei servizi sopra per supporto specializzato.
-            </p>
-        </div>
         """, unsafe_allow_html=True)
-        
-        logger.warning(f"BLACK emergency panel displayed (non-blocking)")
-    
-    elif level == EmergencyLevel.ORANGE:
-        # COMPORTAMENTO ORANGE: Banner warning persistente
-        st.warning(f"""
-        **{rule['message']}**
-        
-        Utilizza la sezione "📍 Strutture Sanitarie Vicine" nella sidebar per trovare 
-        il Pronto Soccorso più vicino con indicazioni stradali.
-        """)
-        logger.info(f"ORANGE warning banner displayed")
-
+        logger.warning("Visualizzato pannello di supporto psicologico (BLACK)")
 # --- UTILITIES DI SICUREZZA E PARSING ---
 class DataSecurity:
     @staticmethod
@@ -322,454 +323,437 @@ class JSONExtractor:
             logger.error(f"Errore critico parsing JSON: {e}")
         return None
 
-# PARTE 1: Lista comuni Emilia-Romagna per validazione
-COMUNI_ER_VALIDI = {
-    "bologna", "modena", "reggio emilia", "parma", "ferrara", "ravenna",
-    "rimini", "forli", "cesena", "piacenza", "imola", "carpi", "cento",
-    "faenza", "casalecchio", "san lazzaro", "medicina", "budrio", "lugo",
-    "cervia", "riccione", "cattolica", "bellaria", "comacchio", "argenta"
-}
 
-# PARTE 1: Validatori Input per ogni Step
+
 class InputValidator:
     """
-    Validatori stateless per input utente in ogni step del triage.
-    
-    REGOLA ANTI-ALLUCINAZIONE:
-    - Ogni validatore ritorna Tuple[bool, Optional[Any]]
-    - bool = True se validazione OK, False altrimenti
-    - Any = valore estratto/normalizzato se True, None se False
-    - NO eccezioni sollevate: gestione errori interna
+    Validatori stateless per la normalizzazione dell'input utente.
+    Gestisce la pulizia dei dati locali prima dell'eventuale fallback su LLM.
     """
     
-    # Dizionario numeri scritti in italiano (0-100)
+    # Mappatura minima per numeri comuni scritti a parole
     WORD_TO_NUM = {
         "zero": 0, "uno": 1, "due": 2, "tre": 3, "quattro": 4, "cinque": 5,
         "sei": 6, "sette": 7, "otto": 8, "nove": 9, "dieci": 10,
-        "undici": 11, "dodici": 12, "tredici": 13, "quattordici": 14, "quindici": 15,
-        "sedici": 16, "diciassette": 17, "diciotto": 18, "diciannove": 19,
-        "venti": 20, "ventuno": 21, "ventidue": 22, "ventitre": 23, "ventiquattro": 24,
-        "venticinque": 25, "ventisei": 26, "ventisette": 27, "ventotto": 28, "ventinove": 29,
-        "trenta": 30, "trentuno": 31, "trentadue": 32, "trentatre": 33, "trentaquattro": 34,
-        "trentacinque": 35, "quaranta": 40, "quarantacinque": 45, "cinquanta": 50,
-        "cinquantacinque": 55, "sessanta": 60, "sessantacinque": 65, "settanta": 70,
-        "settantacinque": 75, "ottanta": 80, "ottantacinque": 85, "novanta": 90,
-        "novantacinque": 95, "cento": 100
+        "venti": 20, "trenta": 30, "quaranta": 40, "cinquanta": 50, 
+        "sessanta": 60, "settanta": 70, "ottanta": 80, "novanta": 90, "cento": 100
     }
-    
+
     @staticmethod
     def validate_location(user_input: str) -> Tuple[bool, Optional[str]]:
-        """
-        Valida che l'input sia un comune dell'Emilia-Romagna.
+        """Valida il comune ER usando fuzzy matching per correggere piccoli refusi."""
+        if not user_input: return False, None
         
-        Args:
-            user_input: Testo grezzo dell'utente
+        # Pulizia base e rimozione articoli iniziali
+        target = user_input.lower().strip()
+        target = re.sub(r'^(il|lo|la|i|gli|le|a|di)\s+', '', target)
         
-        Returns:
-            (True, "Comune Normalizzato") se valido
-            (False, None) se non riconosciuto
-        """
-        if not user_input or not isinstance(user_input, str):
-            return False, None
+        # Controllo esatto (Veloce)
+        if target in COMUNI_ER_VALIDI:
+            return True, target.title()
         
-        input_clean = user_input.lower().strip()
-        
-        # Rimuovi articoli comuni
-        input_clean = re.sub(r'\b(il|lo|la|i|gli|le|un|uno|una|di|a)\b', '', input_clean).strip()
-        
-        # Match esatto
-        if input_clean in COMUNI_ER_VALIDI:
-            return True, input_clean.title()
-        
-        # Match parziale (almeno 4 caratteri in comune)
-        if len(input_clean) >= 4:
-            for comune in COMUNI_ER_VALIDI:
-                if input_clean in comune:
-                    return True, comune.title()
-                if comune in input_clean:
-                    return True, comune.title()
-                if len(input_clean) >= 5 and abs(len(input_clean) - len(comune)) <= 2:
-                    diff = sum(1 for a, b in zip(input_clean, comune) if a != b)
-                    if diff <= 2:
-                        return True, comune.title()
-        
-        return False, None
-    
+        # Fuzzy matching (Intelligente) - Gestisce accenti e piccoli errori
+        matches = difflib.get_close_matches(target, list(COMUNI_ER_VALIDI.keys()), n=1, cutoff=0.8)
+        return (True, matches[0].title()) if matches else (False, None)
+
     @staticmethod
     def validate_age(user_input: str) -> Tuple[bool, Optional[int]]:
-        """
-        Estrae età da testo libero (0-120 anni).
+        """Estrae l'età (0-120) da numeri arabi, parole o categorie."""
+        if not user_input: return False, None
+        text = user_input.lower()
         
-        Args:
-            user_input: Testo grezzo (es. "ho 25 anni", "venticinque", "67")
-        
-        Returns:
-            (True, età_int) se estratta ed entro range
-            (False, None) se non trovata o fuori range
-        """
-        if not user_input or not isinstance(user_input, str):
-            return False, None
-        
-        text_lower = user_input.lower().strip()
-        
-        # PRIORITÀ 1: Estrazione numeri diretti
-        numbers = re.findall(r'\b(\d{1,3})\b', text_lower)
-        for num_str in numbers:
-            try:
-                age = int(num_str)
-                if 0 <= age <= 120:
-                    if age < 10 and len(numbers) > 1:
-                        continue
-                    return True, age
-            except ValueError:
-                continue
-        
-        # PRIORITÀ 2: Numeri scritti in lettere
-        for word, num in InputValidator.WORD_TO_NUM.items():
-            if word in text_lower:
-                if 0 <= num <= 120:
-                    return True, num
-        
-        # PRIORITÀ 3: Keyword speciali
-        if any(kw in text_lower for kw in ["neonato", "appena nato", "nato da poco"]):
-            return True, 0
-        
-        if "bambino" in text_lower or "bambina" in text_lower:
-            return True, 5
-        
-        if "adolescente" in text_lower or "teenager" in text_lower:
-            return True, 15
-        
-        if any(kw in text_lower for kw in ["anziano", "anziana", "vecchio", "vecchia"]):
-            return True, 75
+        # 1. Ricerca numeri (es. "ho 45 anni")
+        nums = re.findall(r'\b(\d{1,3})\b', text)
+        if nums:
+            age = int(nums[0])
+            if 0 <= age <= 120: return True, age
+            
+        # 2. Ricerca numeri a parole (es. "trenta")
+        for word, val in InputValidator.WORD_TO_NUM.items():
+            if word in text: return True, val
+            
+        # 3. Categorie generazionali (Fallback rapido)
+        if "bambin" in text: return True, 7
+        if "anzian" in text or "vecchio" in text: return True, 80
+        if "neonato" in text: return True, 0
         
         return False, None
-    
+
     @staticmethod
     def validate_pain_scale(user_input: str) -> Tuple[bool, Optional[int]]:
-        """
-        Valida scala dolore 1-10 o converte descrittori qualitativi.
+        """Converte descrittori di dolore o numeri in scala 1-10."""
+        if not user_input: return False, None
+        text = user_input.lower()
         
-        Args:
-            user_input: Testo grezzo (es. "8", "molto forte", "insopportabile")
-        
-        Returns:
-            (True, valore_1_10) se riconosciuto
-            (False, None) se non riconosciuto
-        """
-        if not user_input or not isinstance(user_input, str):
-            return False, None
-        
-        text_lower = user_input.lower().strip()
-        
-        # PRIORITÀ 1: Numeri diretti 1-10
-        numbers = re.findall(r'\b(\d{1,2})\b', text_lower)
-        for num_str in numbers:
-            try:
-                pain = int(num_str)
-                if 1 <= pain <= 10:
-                    return True, pain
-            except ValueError:
-                continue
-        
-        # PRIORITÀ 2: Mappatura qualitativa
+        # Numeri diretti
+        nums = re.findall(r'\b(\d{1,2})\b', text)
+        if nums and 1 <= int(nums[0]) <= 10:
+            return True, int(nums[0])
+            
+        # Mapping qualitativo essenziale
         pain_map = {
-            "nessun": 0,
-            "poco": 2,
-            "leggero": 2,
-            "lieve": 3,
-            "sopportabile": 3,
-            "moderato": 5,
-            "medio": 5,
-            "normale": 5,
-            "forte": 7,
-            "acuto": 7,
-            "molto": 8,
-            "intenso": 8,
-            "grave": 8,
-            "severo": 9,
-            "insopportabile": 10,
-            "estremo": 10,
-            "lancinante": 10,
-            "atroce": 10
+            "lieve": 2, "poco": 2, "moderato": 5, "medio": 5,
+            "forte": 8, "molto": 8, "intenso": 8, "acuto": 8,
+            "insopportabile": 10, "atroce": 10, "estremo": 10
         }
-        
-        for keyword, value in pain_map.items():
-            if keyword in text_lower:
-                if value == 0:
-                    return True, 1
-                return True, value
-        
-        # PRIORITÀ 3: Numeri scritti in lettere
-        for word, num in InputValidator.WORD_TO_NUM.items():
-            if word in text_lower and 1 <= num <= 10:
-                return True, num
-        
+        for kw, val in pain_map.items():
+            if kw in text: return True, val
+            
         return False, None
-    
+
     @staticmethod
     def validate_red_flags(user_input: str) -> Tuple[bool, List[str]]:
-        """
-        Identifica presenza di red flags clinici nel testo.
+        """Rileva segnali di allarme clinico critici per attivazione Fast-Triage."""
+        if not user_input: return True, []
+        text = user_input.lower()
         
-        Args:
-            user_input: Testo grezzo dell'utente
-        
-        Returns:
-            (True, lista_red_flags) - sempre True, lista può essere vuota
-        """
-        if not user_input or not isinstance(user_input, str):
-            return True, []
-        
-        red_flags = []
-        text_lower = user_input.lower()
-        
-        flag_patterns = {
-            "dolore_toracico": [
-                r"dolore.{0,10}petto", r"dolore.{0,10}torace",
-                r"oppressione.{0,10}petto", r"stretta.{0,10}petto",
-                r"peso.{0,10}petto"
-            ],
-            "dispnea": [
-                r"difficolt[aà].{0,15}respir", r"affanno", r"fiato corto",
-                r"non.{0,10}riesco.{0,10}respir", r"soffoco", r"fame d'aria"
-            ],
-            "alterazione_coscienza": [
-                r"confus[oa]", r"stordito", r"svenimento", r"perso.{0,10}sensi",
-                r"coscienza alterata", r"non.{0,10}lucido"
-            ],
-            "emorragia": [
-                r"sangue.{0,10}abbondante", r"emorragia", r"sanguino.{0,10}molto",
-                r"perdit[ao].{0,10}sangue.{0,10}importante"
-            ],
-            "trauma_cranico": [
-                r"battuto.{0,10}testa", r"trauma.{0,10}crani", r"caduta.{0,10}testa",
-                r"colpo.{0,10}testa", r"botta.{0,10}testa.{0,10}forte"
-            ],
-            "dolore_addominale_acuto": [
-                r"dolore.{0,10}addom.{0,10}acuto", r"pancia.{0,10}dolore.{0,10}forte",
-                r"addome.{0,10}rigido", r"dolore.{0,10}pancia.{0,10}insopportabile"
-            ],
-            "paralisi": [
-                r"non.{0,10}muovo", r"paralizzat[oa]", r"braccio.{0,10}bloccato",
-                r"gamba.{0,10}non.{0,10}si muove", r"met[aà].{0,10}corpo.{0,10}bloccat"
-            ],
-            "convulsioni": [
-                r"convulsion", r"crisi.{0,10}epilett", r"attacco.{0,10}epilett",
-                r"spasmi", r"tremori.{0,10}incontrollabili"
-            ]
+        flags_detected = []
+        patterns = {
+            "dolore_toracico": r"dolore.*petto|oppressione.*torace|infarto",
+            "dispnea": r"non.*respir|affanno|soffoc|fame.*aria",
+            "coscienza": r"svenut|perso.*sensi|confus|stordit",
+            "emorragia": r"sangue.*molto|emorragia|sanguinamento.*forte"
         }
         
-        for flag_name, patterns in flag_patterns.items():
-            for pattern in patterns:
-                if re.search(pattern, text_lower):
-                    red_flags.append(flag_name)
-                    break
+        for name, pat in patterns.items():
+            if re.search(pat, text):
+                flags_detected.append(name)
         
-        return True, red_flags
+        return True, flags_detected
 
-# PARTE 2: Modulo Geolocalizzazione
-def haversine_distance(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
-    """
-    Calcola distanza Great Circle tra due coordinate (formula Haversine).
-    """
-    if not (-90 <= lat1 <= 90) or not (-90 <= lat2 <= 90):
-        raise ValueError(f"Latitude out of range: lat1={lat1}, lat2={lat2}")
-    if not (-180 <= lon1 <= 180) or not (-180 <= lon2 <= 180):
-        raise ValueError(f"Longitude out of range: lon1={lon1}, lon2={lon2}")
-    
-    R = 6371.0  # Raggio medio Terra (km)
-    phi1 = math.radians(lat1)
-    phi2 = math.radians(lat2)
-    delta_phi = math.radians(lat2 - lat1)
-    delta_lambda = math.radians(lon2 - lon1)
-    
-    a = (math.sin(delta_phi / 2) ** 2 +
-         math.cos(phi1) * math.cos(phi2) * math.sin(delta_lambda / 2) ** 2)
-    c = 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
-    
-    return R * c
+# =============================================================
+# CARICAMENTO KNOWLEDGE BASE (Eseguito solo all'avvio)
+# =============================================================
 
-
-def find_nearest_facilities(
-    user_lat: float, user_lon: float,
-    facility_type: str = "pronto_soccorso",
-    max_results: int = 3, max_distance_km: float = 50.0
-) -> List[Dict]:
+def load_master_kb(filepath="master_kb.json") -> Dict:
     """
-    Trova strutture sanitarie più vicine da master_kb.json.
+    Carica la Knowledge Base delle strutture sanitarie in memoria.
+    Questo evita di riaprire il file a ogni ricerca dell'utente.
     """
     try:
-        with open("master_kb.json", 'r', encoding='utf-8') as f:
-            kb = json.load(f)
-    except FileNotFoundError:
-        logger.error("master_kb.json not found in root directory")
-        return []
+        if not os.path.exists(filepath):
+            logger.error(f"File {filepath} non trovato. La ricerca strutture non funzionerà.")
+            return {}
+            
+        with open(filepath, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+            # Logghiamo il numero di strutture caricate per tipo
+            stats = {k: len(v) for k, v in data.items() if isinstance(v, list)}
+            logger.info(f"Knowledge Base caricata con successo: {stats}")
+            return data
+            
     except json.JSONDecodeError as e:
-        logger.error(f"master_kb.json invalid JSON: {e}")
-        return []
+        logger.error(f"Errore nel formato JSON di {filepath}: {e}")
+        return {}
+    except Exception as e:
+        logger.error(f"Errore imprevisto nel caricamento KB: {e}")
+        return {}
+
+# Costante globale che funge da database in memoria (O(1) access)
+FACILITIES_KB = load_master_kb()
+
+# =============================================================
+# LOGICA DI CALCOLO E RICERCA
+# =============================================================
+
+def haversine_distance(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
+    """Calcola la distanza in km tra due coordinate geografiche."""
+    # Validazione range
+    if not (-90 <= lat1 <= 90) or not (-90 <= lat2 <= 90) or \
+       not (-180 <= lon1 <= 180) or not (-180 <= lon2 <= 180):
+        return 9999.0 # Valore di errore per distanze out of range
+
+    R = 6371.0  # Raggio Terra (km)
+    phi1, phi2 = math.radians(lat1), math.radians(lat2)
+    d_phi = math.radians(lat2 - lat1)
+    d_lam = math.radians(lon2 - lon1)
     
-    facilities = kb.get(facility_type, [])
-    if not facilities:
-        logger.warning(f"No facilities found for type '{facility_type}'")
-        return []
-    
+    a = (math.sin(d_phi / 2)**2 +
+         math.cos(phi1) * math.cos(phi2) * math.sin(d_lam / 2)**2)
+    return R * 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
+
+# =============================================================
+# CARICAMENTO DATASET (Eseguito una sola volta all'avvio)
+# =============================================================
+
+def load_geodata_er(filepath="mappa_er.json") -> Dict[str, Dict[str, Any]]:
+    """
+    Carica TUTTI i comuni e le loro proprietà dal Canvas mappa_er.json.
+    Restituisce un dizionario ottimizzato per lookup rapidi.
+    """
+    try:
+        if not os.path.exists(filepath):
+            logger.error(f"File {filepath} non trovato.")
+            return {}
+
+        with open(filepath, "r", encoding="utf-8") as f:
+            data = json.load(f)
+            geoms = data.get("objects", {}).get("comuni", {}).get("geometries", [])
+            
+            # Creiamo una mappa: "nome_comune" -> {lat, lon, prov_acr}
+            # Questo sostituisce i vecchi dizionari manuali
+            return {
+                g["properties"]["name"].lower().strip(): {
+                    "lat": float(g["properties"]["lat"]),
+                    "lon": float(g["properties"]["lon"]),
+                    "prov": g["properties"].get("prov_acr", "ER")
+                }
+                for g in geoms if "name" in g["properties"]
+            }
+    except Exception as e:
+        logger.error(f"Errore caricamento geodata: {e}")
+        return {}
+
+# Inizializzazione dati globali
+ALL_COMUNI = load_geodata_er()
+# Supponiamo che FACILITIES_KB sia caricato altrove come visto in precedenza
+# FACILITIES_KB = load_master_kb() 
+
+# =============================================================
+# LOGICA DI CALCOLO E RICERCA
+# =============================================================
+
+def haversine_distance(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
+    """Formula di Haversine compatta per distanza in km."""
+    R = 6371.0
+    dlat, dlon = math.radians(lat2-lat1), math.radians(lon2-lon1)
+    a = math.sin(dlat/2)**2 + math.cos(math.radians(lat1)) * math.cos(math.radians(lat2)) * math.sin(dlon/2)**2
+    return R * 2 * math.atan2(math.sqrt(a), math.sqrt(1-a))
+
+def find_nearest_facilities(user_lat: float, user_lon: float, facility_type: str = "pronto_soccorso", 
+                             max_results: int = 3, max_distance_km: float = 50.0) -> List[Dict]:
+    """Trova strutture vicine filtrando e ordinando in memoria."""
+    # Nota: FACILITIES_KB deve essere accessibile globalmente
+    facilities = globals().get('FACILITIES_KB', {}).get(facility_type, [])
     enriched = []
-    for facility in facilities:
-        try:
-            f_lat = float(facility.get('latitudine') or facility.get('lat', 0))
-            f_lon = float(facility.get('longitudine') or facility.get('lon', 0))
-            if f_lat == 0.0 and f_lon == 0.0:
-                continue
-            distance = haversine_distance(user_lat, user_lon, f_lat, f_lon)
-            if distance <= max_distance_km:
-                facility_copy = facility.copy()
-                facility_copy['distance_km'] = round(distance, 2)
-                enriched.append(facility_copy)
-        except (KeyError, ValueError, TypeError) as e:
-            logger.warning(f"Skipping facility: {e}")
-            continue
-    
-    enriched.sort(key=lambda x: x['distance_km'])
-    logger.info(f"Found {len(enriched)} facilities within {max_distance_km}km")
-    return enriched[:max_results]
 
+    for f in facilities:
+        f_lat = float(f.get('latitudine') or f.get('lat', 0))
+        f_lon = float(f.get('longitudine') or f.get('lon', 0))
+        if f_lat == 0: continue
+        
+        dist = haversine_distance(user_lat, user_lon, f_lat, f_lon)
+        if dist <= max_distance_km:
+            enriched.append({**f, 'distance_km': round(dist, 2)})
 
-def estimate_eta(distance_km: float, area_type: str = "urban") -> Dict[str, float]:
-    """
-    Stima tempo di arrivo (ETA) basato su velocità medie.
-    """
-    TORTUOSITY_FACTOR = 1.3
-    SPEED_MAP = {"urban": 30.0, "suburban": 50.0, "rural": 70.0}
-    
-    real_distance = distance_km * TORTUOSITY_FACTOR
-    avg_speed = SPEED_MAP.get(area_type, 50.0)
-    duration_minutes = (real_distance / avg_speed) * 60
-    
-    return {
-        "duration_minutes": round(duration_minutes, 1),
-        "real_distance_km": round(real_distance, 2)
-    }
+    return sorted(enriched, key=lambda x: x['distance_km'])[:max_results]
 
+# =============================================================
+# FUNZIONI DI INTERFACCIA (Rifattorizzate e Dinamiche)
+# =============================================================
 
 def get_comune_coordinates(comune: str) -> Optional[Dict[str, float]]:
     """
-    Ottiene coordinate geografiche di un comune ER.
+    Ottiene coordinate di QUALSIASI comune caricato dal Canvas.
+    Utilizza fuzzy matching per correggere refusi.
     """
-    COMUNI_COORDS = {
-        "bologna": {"lat": 44.4949, "lon": 11.3426},
-        "modena": {"lat": 44.6471, "lon": 10.9252},
-        "parma": {"lat": 44.8015, "lon": 10.3279},
-        "reggio emilia": {"lat": 44.6989, "lon": 10.6297},
-        "ferrara": {"lat": 44.8381, "lon": 11.6197},
-        "ravenna": {"lat": 44.4184, "lon": 12.2035},
-        "rimini": {"lat": 44.0678, "lon": 12.5695},
-        "forli": {"lat": 44.2225, "lon": 12.0408},
-        "forlì": {"lat": 44.2225, "lon": 12.0408},
-        "cesena": {"lat": 44.1396, "lon": 12.2431},
-        "piacenza": {"lat": 45.0526, "lon": 9.6924},
-        "imola": {"lat": 44.3534, "lon": 11.7142},
-        "carpi": {"lat": 44.7842, "lon": 10.8867},
-        "faenza": {"lat": 44.2858, "lon": 11.8814},
-        "lugo": {"lat": 44.4203, "lon": 11.9098},
-        "cervia": {"lat": 44.2619, "lon": 12.3476},
-        "riccione": {"lat": 43.9990, "lon": 12.6556},
-        "cattolica": {"lat": 43.9636, "lon": 12.7392},
-        "cento": {"lat": 44.7289, "lon": 11.2892},
-        "sassuolo": {"lat": 44.5433, "lon": 10.7844},
-        "casalecchio di reno": {"lat": 44.4816, "lon": 11.2783},
-        "san lazzaro di savena": {"lat": 44.4651, "lon": 11.4087},
-        "fidenza": {"lat": 44.8654, "lon": 10.0604},
-        "correggio": {"lat": 44.7713, "lon": 10.7803},
-        "formigine": {"lat": 44.5764, "lon": 10.8506}
-    }
+    name = comune.lower().strip()
+    # Match esatto
+    if name in ALL_COMUNI:
+        return {"lat": ALL_COMUNI[name]["lat"], "lon": ALL_COMUNI[name]["lon"]}
     
-    comune_normalized = comune.lower().strip()
-    coords = COMUNI_COORDS.get(comune_normalized)
+    # Fuzzy match su tutti i comuni della regione
+    matches = difflib.get_close_matches(name, list(ALL_COMUNI.keys()), n=1, cutoff=0.8)
+    if matches:
+        match_name = matches[0]
+        return {"lat": ALL_COMUNI[match_name]["lat"], "lon": ALL_COMUNI[match_name]["lon"]}
     
-    if coords:
-        logger.info(f"Coordinates found for '{comune}': {coords}")
-    else:
-        logger.warning(f"No coordinates for comune '{comune}'")
-    
-    return coords
-
+    return None
 
 def get_area_type_from_comune(comune: str) -> str:
-    """
-    Determina tipo area (urban/suburban/rural) basato su comune.
-    """
-    urban_cities = [
-        "bologna", "modena", "parma", "reggio emilia", "ferrara",
-        "ravenna", "rimini", "forli", "forlì", "cesena", "piacenza"
-    ]
-    suburban_cities = [
-        "imola", "carpi", "sassuolo", "faenza", "lugo", "cervia",
-        "cesenatico", "riccione", "cattolica", "fidenza", "correggio"
-    ]
+    """Determina il tipo di area basato sulla centralità urbana."""
+    urban_hubs = {"bologna", "modena", "parma", "reggio emilia", "ferrara", "ravenna", "rimini", "forlì", "cesena", "piacenza"}
+    suburban_hubs = {"imola", "carpi", "sassuolo", "faenza", "lugo", "cervia", "riccione", "cattolica", "fidenza"}
     
-    comune_lower = comune.lower().strip()
-    if comune_lower in urban_cities:
-        return "urban"
-    elif comune_lower in suburban_cities:
-        return "suburban"
+    name = comune.lower().strip()
+    if name in urban_hubs: return "urban"
+    if name in suburban_hubs: return "suburban"
     return "rural"
 
-# --- BACKEND SYNC (GDPR COMPLIANT) ---
+def estimate_eta(distance_km: float, area_type: str = "urban") -> Dict[str, float]:
+    """Stima ETA considerando traffico e tortuosità stradale."""
+    speeds = {"urban": 30.0, "suburban": 50.0, "rural": 70.0}
+    real_dist = distance_km * 1.3 # Fattore di tortuosità medio
+    duration = (real_dist / speeds.get(area_type, 50.0)) * 60
+    return {"duration_minutes": round(duration, 1), "real_distance_km": round(real_dist, 2)}
+
 class BackendClient:
     def __init__(self):
-        # I secrets vengono letti da .streamlit/secrets.toml
-        self.url = st.secrets.get("BACKEND_URL", "https://api.health-navigator.it/triage")
-        self.api_key = st.secrets.get("BACKEND_API_KEY", "")
+        """
+        Inizializza il client per la sincronizzazione dati.
+        Mantiene la sicurezza delle credenziali tramite st.secrets.
+        """
+        # Puntiamo al server locale (localhost) per il test con il file .bat
+        # Se non presente nei secrets, usa il fallback localhost per lo sviluppo
+        self.url = st.secrets.get("BACKEND_URL", "http://127.0.0.1:5000/triage")
+        self.api_key = st.secrets.get("BACKEND_API_KEY", "test-key-locale")
         self.session = requests.Session()
-        retries = Retry(total=5, backoff_factor=1, status_forcelist=[500, 502, 503, 504])
+        
+        # 1. GESTIONE DELLA RESILIENZA (Retry Logic)
+        # Configurato per 5 tentativi con backoff progressivo per gestire sovraccarichi
+        retries = Retry(
+            total=5, 
+            backoff_factor=1, 
+            status_forcelist=[500, 502, 503, 504]
+        )
+        self.session.mount('http://', HTTPAdapter(max_retries=retries))
         self.session.mount('https://', HTTPAdapter(max_retries=retries))
 
     def sync(self, data: Dict):
-        """Invia dati strutturati per il backend (Triage Data Passing)."""
+        """
+        Invia dati strutturati al backend rispettando il GDPR e arricchendo il contesto.
+        """
+        # 2. PROTEZIONE DELLA PRIVACY (GDPR Compliance)
         if not st.session_state.get("gdpr_consent", False):
+            logger.warning("BACKEND_SYNC | Invio negato: Consenso GDPR mancante.")
             return 
             
         try:
-            # Arricchimento dati per il backend
+            # 3. ARRICCHIMENTO DEI DATI (Contextual Data)
+            # Aggiungiamo metadati vitali per l'analisi clinica e cronologica
             enriched_data = {
-                "session_id": st.session_state.session_id,
-                "phase": PHASES[st.session_state.current_phase_idx]["id"],
+                "session_id": st.session_state.get("session_id", "anon_session"),
+                "phase": st.session_state.get("step", "unknown_phase"),
                 "triage_data": data,
-                "current_specialization": st.session_state.specialization,
+                "current_specialization": st.session_state.get("specialization", "Generale"),
                 "timestamp": datetime.now().isoformat()
             }
             
+            # 4. SICUREZZA DELLE CREDENZIALI
             headers = {
                 "Authorization": f"Bearer {self.api_key}",
                 "Content-Type": "application/json"
             }
-            # Simulazione invio (decommentare in produzione)
-            # self.session.post(self.url, json=enriched_data, headers=headers, timeout=5)
-            logger.info(f"BACKEND_SYNC | Data: {json.dumps(enriched_data)}")
+            
+            # INVIO REALE (Attivo per il test con il file .bat)
+            response = self.session.post(
+                self.url, 
+                json=enriched_data, 
+                headers=headers, 
+                timeout=5
+            )
+            
+            if response.status_code == 200:
+                logger.info(f"✅ BACKEND_SYNC | Dati sincronizzati con successo per sessione: {enriched_data['session_id']}")
+            else:
+                logger.error(f"❌ BACKEND_SYNC | Errore server ({response.status_code}): {response.text}")
+
         except Exception as e:
-            logger.error(f"Sync Backend Fallito: {e}")
+            logger.error(f"❌ BACKEND_SYNC | Connessione fallita: {e}")
 
-# --- CLASSE LOGISTICA ---
 class PharmacyService:
-    def __init__(self, directory: str = "knowledge_base/logistics/farmacie"):
-        self.directory = directory
+    """
+    Servizio logistico avanzato per la ricerca di farmacie in Emilia-Romagna.
+    Integrazione intelligente con il database geografico regionale per ricerche di prossimità.
+    """
+    def __init__(self, emilia_path: str = "FARMACIE_EMILIA.json", romagna_path: str = "FARMACIE_ROMAGNA.json"):
+        self.data = self._load_all_data(emilia_path, romagna_path)
+        # Lista di tutti i comuni presenti nel database farmacie
+        self.cities_in_db = sorted(list(set(f['comune'].lower() for f in self.data)))
 
-    @st.cache_data
-    def get_pharmacies(_self, comune: str) -> List[Dict]:
-        path = os.path.join(_self.directory, f"{comune.lower().replace(' ', '_')}.json")
-        if os.path.exists(path):
-            try:
-                with open(path, 'r', encoding='utf-8') as f:
-                    return json.load(f)
-            except Exception: return []
-        # Fallback Mock per demo
-        if comune.lower() == "roma":
-            return [
-                {"nome": "Farmacia Centrale", "lat": 41.9028, "lon": 12.4964, "indirizzo": "Via del Corso, 1", "H24": True},
-                {"nome": "Farmacia S. Anna", "lat": 41.9035, "lon": 12.4544, "indirizzo": "Via di Porta Angelica, 1", "H24": False}
-            ]
-        return []
+    def _load_all_data(self, p1: str, p2: str) -> List[Dict]:
+        """Carica e unisce i database regionali."""
+        combined = []
+        for path in [p1, p2]:
+            if os.path.exists(path):
+                try:
+                    with open(path, 'r', encoding='utf-8') as f:
+                        combined.extend(json.load(f))
+                except Exception:
+                    continue
+        return combined
+
+    def _is_pharmacy_open(self, orari: Dict, dt: datetime = None) -> bool:
+        """
+        Verifica l'apertura in tempo reale.
+        Gestisce 'H24', 'Chiuso' e formati complessi come '08:30-13:00, 15:00-19:30'.
+        """
+        if not dt: dt = datetime.now()
+        
+        days_map = {0: "lunedi", 1: "martedi", 2: "mercoledi", 3: "giovedi", 4: "venerdi", 5: "sabato", 6: "domenica"}
+        today_name = days_map[dt.weekday()]
+        orario_oggi = orari.get(today_name, "").upper()
+
+        if "H24" in orario_oggi: return True
+        if "CHIUSO" in orario_oggi or not orario_oggi: return False
+
+        try:
+            current_time = dt.strftime("%H:%M")
+            # Pulizia per gestire note extra tra parentesi
+            clean_orario = orario_oggi.split("(")[0].strip() 
+            slots = clean_orario.split(",")
+            for slot in slots:
+                if "-" in slot:
+                    start, end = slot.strip().split("-")
+                    if start.strip() <= current_time <= end.strip():
+                        return True
+        except Exception:
+            return False
+        return False
+
+    def get_pharmacies(self, comune_input: str, open_only: bool = False, 
+                       user_lat: float = None, user_lon: float = None, 
+                       radius_km: float = 15.0) -> List[Dict]:
+        """
+        Ricerca farmacie con fallback geografico automatico.
+        """
+        target_city = comune_input.lower().strip()
+        
+        # 1. Fuzzy matching per normalizzare il comune inserito
+        matches = difflib.get_close_matches(target_city, self.cities_in_db, n=1, cutoff=0.8)
+        if matches: target_city = matches[0]
+
+        results = []
+        
+        # Importiamo le funzioni dal modulo geolocalizzazione aggiornato
+        from geolocalizzazione_er import haversine_distance, get_comune_coordinates
+
+        for f in self.data:
+            dist = None
+            # Recupero coordinate farmacia (se presenti) o del suo comune (fallback)
+            f_lat = f.get('lat') or f.get('latitudine')
+            f_lon = f.get('lon') or f.get('longitudine')
+            
+            if not f_lat or not f_lon:
+                # Fallback: usiamo il centroide del comune della farmacia da mappa_er.json
+                city_coords = get_comune_coordinates(f['comune'])
+                if city_coords:
+                    f_lat, f_lon = city_coords['lat'], city_coords['lon']
+
+            # Calcolo distanza rispetto all'utente
+            if user_lat and user_lon and f_lat and f_lon:
+                dist = haversine_distance(user_lat, user_lon, float(f_lat), float(f_lon))
+
+            # Filtro: Stesso comune OPPURE entro raggio km (demo comuni vicini)
+            is_in_city = f['comune'].lower() == target_city
+            is_nearby = dist is not None and dist <= radius_km
+            
+            if is_in_city or is_nearby:
+                f_copy = f.copy()
+                f_copy['is_open'] = self._is_pharmacy_open(f['orari'])
+                f_copy['distance_km'] = round(dist, 2) if dist is not None else None
+                
+                if open_only and not f_copy['is_open']:
+                    continue
+                    
+                results.append(f_copy)
+
+        # Ordinamento strategico: 1. Aperte, 2. Più vicine
+        results.sort(key=lambda x: (not x['is_open'], x.get('distance_km', 999)))
+        
+        return results
+
+# --- ESEMPIO DI RENDERING PER CHATBOT ---
+def format_pharmacy_results(pharmacies: List[Dict]):
+    if not pharmacies: return "Nessuna farmacia trovata con i criteri selezionati."
+    
+    output = "Ecco le farmacie disponibili:\n"
+    for p in pharmacies[:5]: # Mostriamo le prime 5
+        status = "🟢 APERTA" if p['is_open'] else "🔴 CHIUSA"
+        dist_info = f" a {p['distance_km']} km" if p['distance_km'] else ""
+        output += f"- **{p['nome']}** ({status}{dist_info})\n"
+        output += f"  📍 {p['indirizzo']} | 📞 {p['contatti'].get('telefono', 'N.D.')}\n"
+    return output
 
 # --- ORCHESTRATORE AI (CON LOGICA NO-DIAGNOSI) ---
 class ModelOrchestrator:
@@ -780,7 +764,7 @@ class ModelOrchestrator:
         self.groq_client = groq.Groq(api_key=self.groq_key) if self.groq_key else None
         
         if self.gemini_key:
-            genai.configure(api_key=self.gemini_key)
+            #genai.configure(api_key=self.gemini_key)
             self.gemini_model = genai.GenerativeModel(MODEL_CONFIG["fallback"])
         else:
             self.gemini_model = None
@@ -1169,7 +1153,320 @@ def render_sidebar(pharmacy_db):
                 options=["Piccolo", "Normale", "Grande", "Molto Grande"],
                 value=st.session_state.get('font_size', "Normale"),
                 key='font_size'
+                        )
+            
+            font_size_map = {"Piccolo": "0.9em", "Normale": "1.0em", "Grande": "1.2em", "Molto Grande":  "1.5em"}
+            st.markdown(f"""
+            <style>
+                .stMarkdown, .stText, .stChatMessage {{ font-size: {font_size_map[font_size]} !important; }}
+            </style>
+            """, unsafe_allow_html=True)
+            
+            auto_speech = st.checkbox(
+                "Lettura Automatica Risposte",
+                value=st.session_state.get('auto_speech', False),
+                key='auto_speech',
+                help="Legge automaticamente ogni risposta del bot"
             )
+            
+            if auto_speech:
+                st.info("🔊 Lettura automatica attiva")
+            
+            reduce_motion = st.checkbox(
+                "Riduci Animazioni",
+                value=st. session_state.get('reduce_motion', False),
+                key='reduce_motion'
+            )
+            
+            if reduce_motion:
+                st. markdown("""
+                <style>
+                    *, *::before, *::after { animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; }
+                </style>
+                """, unsafe_allow_html=True)
+            
+            if st.button("🔄 Ripristina Default", use_container_width=True):
+                for key in ['high_contrast', 'font_size', 'auto_speech', 'reduce_motion']:
+                    if key in st.session_state: 
+                        del st.session_state[key]
+                st. rerun()
+
+
+def render_disclaimer():
+    st.markdown("""
+        <div class='disclaimer-box'>
+            <b>CONSENSO INFORMATO:</b><br>
+            1.  Questo sistema effettua solo <b>Triage</b> e non fornisce diagnosi mediche. <br>
+            2. Le informazioni sono elaborate da un'AI e possono contenere inesattezze.<br>
+            3. Per emergenze chiamare il <b>118</b>.<br>
+            4. I dati sono trasmessi in forma protetta al backend per la gestione clinica. 
+        </div>
+    """, unsafe_allow_html=True)
+
+
+def get_step_display_name(step: TriageStep) -> str:
+    """Ottiene nome human-readable per step."""
+    names = {
+        TriageStep.LOCATION: "📍 Localizzazione",
+        TriageStep.CHIEF_COMPLAINT:  "🤒 Sintomo Principale",
+        TriageStep.PAIN_SCALE:  "📊 Intensità Dolore",
+        TriageStep.RED_FLAGS:  "🚨 Segnali di Allarme",
+        TriageStep.ANAMNESIS: "📝 Storia Clinica",
+        TriageStep.DISPOSITION: "🏥 Raccomandazione"
+    }
+    return names. get(step, "Triage")
+
+
+def render_progress_bar():
+    """Renderizza barra progresso basata su step corrente."""
+    progress = st.session_state.current_step.value / len(TriageStep)
+    st.progress(progress)
+
+
+def render_urgency_badge():
+    """Renderizza badge con livello urgenza corrente."""
+    if st.session_state.metadata_history:
+        urgency = st.session_state.metadata_history[-1]. get("urgenza", 3)
+        colors = {1: "#10b981", 2: "#3b82f6", 3: "#f59e0b", 4: "#f97316", 5: "#dc2626"}
+        color = colors.get(urgency, "#6b7280")
+        st.markdown(f"""
+        <div style='background:  {color}; color: white; padding: 5px 15px; 
+                    border-radius: 20px; text-align: center; width: fit-content; margin: 0 auto;'>
+            Urgenza: {urgency}
+        </div>
+        """, unsafe_allow_html=True)
+
+
+# --- SESSION STATE E FUNZIONI AVANZAMENTO ---
+def init_session():
+    """Inizializza stato sessione con supporto State Machine."""
+    if "session_id" not in st.session_state:
+        st.session_state.session_id = str(uuid.uuid4())
+        st.session_state.messages = []
+        st.session_state.current_step = TriageStep. LOCATION
+        st.session_state. current_phase_idx = 0
+        st.session_state.collected_data = {}
+        st. session_state.step_completed = {step: False for step in TriageStep}
+        st.session_state.metadata_history = []
+        st. session_state.pending_survey = None
+        st.session_state. gdpr_consent = False
+        st.session_state. specialization = "Generale"
+        st.session_state.backend = BackendClient()
+        st.session_state.emergency_level = None
+        st.session_state.user_comune = None
+        logger.info(f"New session initialized: {st.session_state. session_id}")
+
+
+def advance_step() -> bool:
+    """
+    Avanza allo step successivo del triage.
+    
+    Returns:
+        True se avanzamento riuscito
+        False se già all'ultimo step
+    """
+    current = st.session_state.current_step
+    
+    # Usa il VALUE dell'enum (1, 2, 3, .. .) invece dell'istanza
+    current_value = current.value
+    
+    # Ottieni il valore massimo dell'enum
+    max_value = max(step.value for step in TriageStep)
+    
+    # Se non siamo all'ultimo step, avanza
+    if current_value < max_value:
+        # Crea il prossimo step usando il value + 1
+        next_step = TriageStep(current_value + 1)
+        st.session_state.current_step = next_step
+        logger.info(f"Advanced from {current. name} (value={current_value}) to {next_step.name} (value={next_step.value})")
+        return True
+    
+    logger.info(f"Already at last step: {current.name}")
+    return False
+
+
+def can_proceed_to_next_step() -> bool:
+    """Verifica se lo step corrente è completato."""
+    current_step = st.session_state. current_step
+    step_name = current_step.name
+    
+    # Check se esiste dato validato per questo step
+    has_data = step_name in st.session_state.collected_data
+    
+    # Step DISPOSITION è speciale:  si completa automaticamente
+    if current_step == TriageStep.DISPOSITION: 
+        return True
+    
+    logger.debug(f"can_proceed_to_next_step: step={step_name}, has_data={has_data}")
+    return has_data
+
+
+def render_disposition_summary():
+    """Renderizza riepilogo finale triage."""
+    st.success("### ✅ Triage Completato")
+    
+    if st.session_state.collected_data:
+        st.json(st.session_state.collected_data)
+    
+    if st.session_state.metadata_history:
+        last_metadata = st.session_state.metadata_history[-1]
+        urgency = last_metadata.get("urgenza", 3)
+        
+        comune = st.session_state.get("user_comune")
+        if comune and should_show_ps_wait_times(comune, urgency):
+            render_ps_wait_times_alert(comune, urgency, has_cau_alternative=(3. 0 <= urgency < 4.5))
+    
+    if st.button("🔄 Nuova Sessione", type="primary"):
+        for key in list(st.session_state.keys()):
+            del st.session_state[key]
+        st.rerun()
+
+
+def text_to_speech_button(text: str, key: str, auto_play: bool = False):
+    """Placeholder per funzionalità TTS (Text-to-Speech)."""
+    pass
+
+
+def update_backend_metadata(metadata: Dict):
+    """Aggiorna metadata history e sincronizza con backend."""
+    st.session_state.metadata_history.append(metadata)
+    st.session_state.backend.sync({"event": "metadata_update", "metadata": metadata})
+
+
+def save_structured_log():
+    """Salva log strutturato su file JSONL."""
+    try:
+        log_entry = {
+            "session_id": st.session_state.session_id,
+            "timestamp": datetime.now().isoformat(),
+            "collected_data": st.session_state.collected_data,
+            "metadata_history": st.session_state.metadata_history,
+            "emergency_level": st.session_state.get("emergency_level")
+        }
+        
+        with open(LOG_FILE, 'a', encoding='utf-8') as f:
+            f.write(json.dumps(log_entry) + "\n")
+        
+        logger.info(f"Structured log saved:  session_id={st.session_state.session_id}")
+    except Exception as e:
+        logger. error(f"Failed to save structured log: {e}")
+
+
+# --- FUNZIONE MAIN ---
+def main():
+    """Entry point principale applicazione."""
+    init_session()
+    orchestrator = ModelOrchestrator()
+    pharmacy_db = PharmacyService()
+
+    # STEP 1: Consenso GDPR obbligatorio
+    if not st.session_state.gdpr_consent:
+        st.markdown("### 📋 Benvenuto in Health Navigator")
+        render_disclaimer()
+        if st.button("✅ Accetto e Inizio Triage", type="primary", use_container_width=True):
+            st.session_state. gdpr_consent = True
+            st.rerun()
+        return
+
+    # STEP 2: Rendering UI principale
+    render_sidebar(pharmacy_db)
+    render_header(PHASES[st.session_state. current_phase_idx])
+
+    # STEP 3: Check disponibilità AI
+    if not orchestrator.is_available():
+        st.error("❌ Servizio AI offline. Riprova più tardi.")
+        return
+
+    # STEP 4: Rendering cronologia messaggi
+    for msg in st.session_state.messages:
+        with st.chat_message(msg["role"]):
+            st.markdown(msg["content"])
+
+    # STEP 5: Check se step finale
+    if st.session_state.current_step == TriageStep.DISPOSITION: 
+        render_disposition_summary()
+        save_structured_log()
+        st.stop()
+
+    # STEP 6: Input utente e generazione domanda AI
+    if not st.session_state.pending_survey:
+        if raw_input := st.chat_input("💬 Descrivi i sintomi... "):
+            user_input = DataSecurity.sanitize_input(raw_input)
+            
+            # Check emergenze
+            emergency_level = assess_emergency_level(user_input, {})
+            if emergency_level:
+                st. session_state.emergency_level = emergency_level
+                render_emergency_overlay(emergency_level)
+            
+            st.session_state.messages.append({"role": "user", "content": user_input})
+            
+            with st.chat_message("assistant"):
+                placeholder = st.empty()
+                res_gen = orchestrator.call_ai(
+                    st.session_state.messages, 
+                    PHASES[st.session_state. current_phase_idx]["id"]
+                )
+                
+                # Stream response
+                full_response = ""
+                final_obj = None
+                for chunk in res_gen:
+                    if isinstance(chunk, dict):
+                        final_obj = chunk
+                        break
+                    full_response += chunk
+                    placeholder.markdown(full_response)
+                
+                if final_obj: 
+                    st.session_state.messages.append({"role":  "assistant", "content": final_obj["testo"]})
+                    st.session_state.pending_survey = final_obj
+                    
+                    # Update metadata e check AUSL Romagna
+                    metadata = final_obj.get("metadata", {})
+                    update_backend_metadata(metadata)
+                    
+                    urgency = metadata.get("urgenza", 3)
+                    comune_utente = st.session_state.get("user_comune")
+                    
+                    if comune_utente and should_show_ps_wait_times(comune_utente, urgency):
+                        render_ps_wait_times_alert(comune_utente, urgency, has_cau_alternative=(3.0 <= urgency < 4.5))
+                    
+                    st.rerun()
+
+    # STEP 7: Rendering opzioni survey (se presenti)
+    if st.session_state.pending_survey and st.session_state.pending_survey.get("opzioni"):
+        st.markdown("---")
+        opts = st.session_state.pending_survey["opzioni"]
+        
+        # Debug logging
+        logger.info(f"🔍 Rendering survey options: {opts}")
+        
+        cols = st.columns(len(opts))
+        for i, opt in enumerate(opts):
+            logger.info(f"🔍 Option [{i}]: value='{opt}', type={type(opt)}")
+            
+            if cols[i].button(opt, key=f"btn_{i}", use_container_width=True):
+                st.session_state. messages.append({"role": "user", "content": opt})
+                
+                current_step = st.session_state.current_step
+                step_name = current_step.name
+                
+                # Validazione per step LOCATION
+                if current_step == TriageStep. LOCATION:
+                    is_valid, normalized = InputValidator.validate_location(opt)
+                    if is_valid:
+                        st. session_state.collected_data[step_name] = normalized
+                        st.session_state.user_comune = normalized
+                        logger.info(f"✅ Location validated: {normalized}")
+                
+                st.session_state.pending_survey = None
+                advance_step()
+                st.rerun()
+
+
+if __name__ == "__main__":
+    main()
             
             font_size_map = {"Piccolo": "0.9em", "Normale": "1.0em", "Grande": "1.2em", "Molto Grande": "1.5em"}
             st.markdown(f"""
@@ -1208,14 +1505,17 @@ def render_sidebar(pharmacy_db):
                 st.rerun()
 
 def render_disclaimer():
+    """
+    Renderizza disclaimer GDPR con consenso informato.
+    """
     st.markdown("""
-        <div class='disclaimer-box'>
-            <b>CONSENSO INFORMATO:</b><br>
-            1. Questo sistema effettua solo <b>Triage</b> e non fornisce diagnosi mediche.<br>
-            2. Le informazioni sono elaborate da un'AI e possono contenere inesattezze.<br>
-            3. Per emergenze chiamare il <b>118</b>.<br>
-            4. I dati sono trasmessi in forma protetta al backend per la gestione clinica.
-        </div>
+    <div class='disclaimer-box'>
+        <b>CONSENSO INFORMATO:</b><br>
+        1. Questo sistema effettua solo <b>Triage</b> e non fornisce diagnosi mediche.<br>
+        2. Le informazioni sono elaborate da un'AI e possono contenere inesattezze.<br>
+        3. Per emergenze chiamare il <b>118</b>. <br>
+        4. I dati sono trasmessi in forma protetta al backend per la gestione clinica. 
+    </div>
     """, unsafe_allow_html=True)
 
 # --- STATO SESSIONE ---
@@ -1288,7 +1588,7 @@ def can_proceed_to_next_step() -> bool:
     return has_data
 
 
-def advance_step() -> bool:
+ def advance_step() -> bool:
     """
     Avanza allo step successivo del triage con validazione.
     
@@ -1305,7 +1605,7 @@ def advance_step() -> bool:
     current_value = current_step.value
     
     # Salva timestamp completamento
-    st.session_state.step_timestamps[current_step.name] = {
+    st.session_state.step_timestamps[current_step. name] = {
         'start': st.session_state.get(f'{current_step.name}_start_time', datetime.now()),
         'end': datetime.now()
     }
@@ -1313,8 +1613,12 @@ def advance_step() -> bool:
     # Marca come completato
     st.session_state.step_completed[current_step] = True
     
+    # Ottieni il valore massimo dell'enum
+    max_value = max(step.value for step in TriageStep)
+    
     # Avanza solo se non è l'ultimo step
-    if current_value < len(TriageStep):
+    if current_value < max_value:
+        # Crea il prossimo step usando il value + 1
         next_step = TriageStep(current_value + 1)
         st.session_state.current_step = next_step
         
@@ -1322,13 +1626,13 @@ def advance_step() -> bool:
         st.session_state[f'{next_step.name}_start_time'] = datetime.now()
         
         # Feedback visivo
-        st.toast(f"✅ Completato: {current_step.name}", icon="✅")
+        st.toast(f"✅ Completato:  {current_step.name}", icon="✅")
         
-        logger.info(f"Advanced from {current_step.name} to {next_step.name}")
+        logger.info(f"Advanced from {current_step.name} (value={current_value}) to {next_step.name} (value={next_step.value})")
+        return True
     else:
         logger.info(f"Triage completed: all steps done")
-    
-    return True
+        return True
 
 
 # PARTE 2: Logging Strutturato per Backend Analytics
@@ -1732,6 +2036,102 @@ def update_backend_metadata(metadata):
         st.session_state.specialization = "Psichiatria"
 
 # --- MAIN ---
+# ============================================
+# SESSION STATE E GESTIONE STEP
+# ============================================
+
+def init_session():
+    """
+    Inizializza stato sessione con supporto State Machine. 
+    
+    CAMPI NUOVI (PARTE 1):
+    - current_step: TriageStep enum (step corrente)
+    - collected_data: Dict con dati validati per ogni step
+    - step_completed: Dict[TriageStep, bool] (tracking completamenti)
+    - step_timestamps: Dict con timing per analytics
+    - session_start:  Timestamp inizio sessione
+    - ai_retry_count: Dict per tracking retry AI per fase
+    - emergency_level:  Livello emergenza corrente (EmergencyLevel o None)
+    - user_comune: Comune dell'utente per smart routing
+    """
+    if "session_id" not in st.session_state:
+        # ID sessione univoco
+        st.session_state.session_id = str(uuid.uuid4())
+        
+        # Cronologia messaggi (invariato)
+        st.session_state.messages = []
+        
+        # NUOVO:  State Machine
+        st.session_state.current_step = TriageStep. LOCATION
+        st.session_state.collected_data = {}  # {step_name: validated_value}
+        st.session_state.step_completed = {step: False for step in TriageStep}
+        
+        # NUOVO: Tracking temporale
+        st.session_state. step_timestamps = {}  # {step_name: {'start': dt, 'end': dt}}
+        st.session_state.session_start = datetime.now()
+        
+        # Campi esistenti (mantieni)
+        st.session_state. current_phase_idx = 0
+        st.session_state.pending_survey = None
+        st. session_state.critical_alert = False
+        st. session_state.gdpr_consent = False
+        st.session_state.specialization = "Generale"
+        st.session_state.metadata_history = []
+        st. session_state.backend = BackendClient()
+        
+        # NUOVO: Retry tracking per AI
+        st.session_state. ai_retry_count = {}
+        
+        # NUOVO:  Livello emergenza corrente
+        st.session_state.emergency_level = None
+        
+        # NUOVO: Comune utente per smart routing
+        st.session_state.user_comune = None
+        
+        logger.info(f"New session initialized: {st.session_state. session_id}")
+
+
+def can_proceed_to_next_step() -> bool:
+    """
+    Verifica se lo step corrente è completato e validato.
+    
+    Returns:
+        True se collected_data contiene valore validato per current_step
+        False altrimenti
+    """
+    current_step = st.session_state.current_step
+    step_name = current_step.name
+    
+    # Check se esiste dato validato per questo step
+    has_data = step_name in st.session_state.collected_data
+    
+    # Step DISPOSITION è speciale:  si completa automaticamente
+    if current_step == TriageStep. DISPOSITION:
+        return True
+    
+    logger.debug(f"can_proceed_to_next_step: step={step_name}, has_data={has_data}")
+    return has_data
+
+
+def get_step_display_name(step: TriageStep) -> str:
+    """
+    Ottiene nome human-readable per step.
+    
+    Args:
+        step: TriageStep enum
+    
+    Returns:
+        Stringa descrittiva in italiano
+    """
+    names = {
+        TriageStep.LOCATION: "📍 Localizzazione",
+        TriageStep.CHIEF_COMPLAINT:  "🩺 Sintomo Principale",
+        TriageStep.PAIN_SCALE: "📊 Intensità Dolore",
+        TriageStep.RED_FLAGS:  "🚨 Segnali di Allarme",
+        TriageStep.ANAMNESIS: "📋 Anamnesi",
+        TriageStep.DISPOSITION: "🏥 Raccomandazione"
+    }
+    return names. get(step, step.name)
 def main():
     init_session()
     orchestrator = ModelOrchestrator()
@@ -1824,8 +2224,8 @@ def main():
                     st.session_state.backend.sync(final_obj.get("metadata", {}))
                     st.rerun()
 
-    if st.session_state.pending_survey and st.session_state.pending_survey.get("opzioni"):
-        st.markdown("---")
+     and st.session_state.pending_survey.get("opzioni"):
+       if st.session_state.pending_survey st.markdown("---")
         opts = st.session_state.pending_survey["opzioni"]
         cols = st.columns(len(opts))
         for i, opt in enumerate(opts):
