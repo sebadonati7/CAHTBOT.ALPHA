@@ -56,8 +56,8 @@ st.markdown("""
 # --- COSTANTI DI SISTEMA ---
 MODEL_CONFIG = {
     "triage": "llama-3.1-8b-instant",
-    "complex": "llama-3.3-70b-versatile",
-    "fallback": "gemini-2.0-flash"
+    "complex": "llama-3.3-70b-versatile",  # <--- Cambiato da 3.1 a 3.3
+    "fallback": "gemini-2.5-flash" 
 }
 
 LOG_FILE = "triage_logs.jsonl"
@@ -1850,12 +1850,13 @@ def render_main_application():
         if raw_input := st.chat_input("💬 Descrivi i sintomi... "):
             user_input = DataSecurity.sanitize_input(raw_input)
             
-            # Check emergenze
+            # Check immediato emergenze basato su testo
             emergency_level = assess_emergency_level(user_input, {})
             if emergency_level:
                 st.session_state.emergency_level = emergency_level
                 render_emergency_overlay(emergency_level)
             
+            # Aggiunta immediata del messaggio utente
             st.session_state.messages.append({"role": "user", "content": user_input})
             
             with st.chat_message("assistant", avatar="🩺"):
@@ -1863,9 +1864,7 @@ def render_main_application():
                 typing = st.empty()
                 typing.markdown('<div class="typing-indicator">Analisi triage... </div>', unsafe_allow_html=True)
                 
-                # Determina percorso (A=emergenza, B=salute mentale, C=standard)
-                path = "C"  # Default standard
-                
+                path = "C"  # Percorso standard
                 full_text_vis = ""
                 final_obj = None
                 
@@ -1874,71 +1873,85 @@ def render_main_application():
                         orchestrator,
                         st.session_state.messages, 
                         path,
-                        PHASES[st.session_state.current_phase_idx]["id"]
+                        PHASES[st.session_state.current_phase_idx]["id"],
+                        current_step_name=get_step_display_name(st.session_state.current_step)
                     )
                     
                     typing.empty()
                     
-                    # Consume the generator
+                    # Consumo del generatore in tempo reale
                     for chunk in res_gen:
                         if isinstance(chunk, str):
                             full_text_vis += chunk
                             placeholder.markdown(full_text_vis)
-                        elif hasattr(chunk, 'dict'):  # TriageResponse (Pydantic)
-                            final_obj = chunk.dict()
-                        elif isinstance(chunk, dict):  # Fallback dict
+                        # FIX PYDANTIC: model_dump() al posto di dict()
+                        elif hasattr(chunk, 'model_dump'):  
+                            final_obj = chunk.model_dump()
+                        elif isinstance(chunk, dict):
                             final_obj = chunk
-                
+                    
                 except Exception as e:
                     logger.error(f"Error during AI generation: {e}", exc_info=True)
-                    full_text_vis = "Mi dispiace, si è verificato un errore. Riprova."
+                    full_text_vis = "Mi dispiace, si è verificato un errore di connessione con l'AI. Riprova tra un istante."
                     placeholder.error(full_text_vis)
-            
-            # ✅ CRITICAL FIX: Add assistant message to session state
-            if full_text_vis:
-                st.session_state.messages.append({
-                    "role": "assistant",
-                    "content": full_text_vis
-                })
-                logger.info(f"✅ Assistant message added: {len(full_text_vis)} chars")
-            
-            # Process metadata and survey options (outside the with block)
-            if final_obj:
-                metadata = final_obj.get("metadata", {})
                 
-                # Check for emergencies with metadata
-                if metadata:
-                    emergency_level = assess_emergency_level(user_input, metadata)
-                    if emergency_level:
-                        st.session_state.emergency_level = emergency_level
-                        if emergency_level == EmergencyLevel.BLACK:
-                            st.session_state.critical_alert = True
-                        render_emergency_overlay(emergency_level)
+                # SALVATAGGIO STATO: Essenziale per non perdere la risposta al rerun
+                if full_text_vis:
+                    st.session_state.messages.append({
+                        "role": "assistant",
+                        "content": full_text_vis
+                    })
+                    logger.info(f"✅ Assistant message added: {len(full_text_vis)} chars")
                 
-                # Check survey options
-                if final_obj.get("survey"):
-                    st.session_state.pending_survey = final_obj["survey"]
-                elif final_obj.get("opzioni"):
-                    # Handle case where options are at top level
-                    st.session_state.pending_survey = final_obj
+                # Gestione Metadata e Survey
+                if final_obj:
+                    metadata = final_obj.get("metadata", {})
+                    
+                    # Check emergenze dai metadata AI
+                    if metadata:
+                        update_backend_metadata(metadata)
+                        emergency_level = assess_emergency_level(user_input, metadata)
+                        if emergency_level:
+                            st.session_state.emergency_level = emergency_level
+                            if emergency_level == EmergencyLevel.BLACK:
+                                st.session_state.critical_alert = True
+                            render_emergency_overlay(emergency_level)
+                        
+                        # Check tempi d'attesa PS
+                        urgency = metadata.get("urgenza", 3)
+                        comune_utente = st.session_state.get("user_comune")
+                        
+                        if comune_utente and should_show_ps_wait_times(comune_utente, urgency):
+                            render_ps_wait_times_alert(
+                                comune_utente, 
+                                urgency, 
+                                has_cau_alternative=(3.0 <= urgency < 4.5)
+                            )
+                    
+                    # Gestione Opzioni (Survey) - il modello usa "opzioni", non "survey"
+                    if final_obj.get("opzioni"):
+                        st.session_state.pending_survey = final_obj
+                        logger.info(f"📋 Survey options set: {final_obj.get('opzioni')}")
+                    
+                    # BACKEND SYNC (Silenzioso): 
+                    # Se hai commentato il client, il check 'if metadata and st.session_state.backend' 
+                    # eviterà errori di 'NoneType' o 'Undefined'.
+                    if metadata and hasattr(st.session_state, 'backend') and st.session_state.backend:
+                        try:
+                            st.session_state.backend.sync(metadata)
+                        except:
+                            pass # Silenzio totale come richiesto
                 
-                # Backend sync
-                if metadata:
-                    st.session_state.backend.sync(metadata)
-            
-            # ✅ RERUN to display the new message ONLY if no survey options to show
-            # If there are survey options, they'll be rendered below and rerun happens on button click
-            if not st.session_state.pending_survey:
+                # Rerender per mostrare i bottoni della survey o il messaggio finale
                 st.rerun()
 
-
-        # STEP 7: Rendering opzioni survey (se presenti)
-            if st.session_state.pending_survey and st.session_state.pending_survey.get("opzioni"):
-                st.markdown("---")
-                opts = st.session_state.pending_survey["opzioni"]
-                logger.info(f"🔍 Rendering survey options: {opts}")
-                cols = st.columns(len(opts))
-                for i, opt in enumerate(opts):
+    # STEP 7: Rendering opzioni survey (se presenti)
+    if st.session_state.pending_survey and st.session_state.pending_survey.get("opzioni"):
+        st.markdown("---")
+        opts = st.session_state.pending_survey["opzioni"]
+        logger.info(f"🔍 Rendering survey options: {opts}")
+        cols = st.columns(len(opts))
+        for i, opt in enumerate(opts):
                     logger.info(f"🔍 Option [{i}]: value='{opt}', type={type(opt)}")
                     
                     if cols[i].button(opt, key=f"btn_{i}", use_container_width=True):
