@@ -1926,8 +1926,11 @@ def render_main_application():
                 if metadata:
                     st.session_state.backend.sync(metadata)
             
-            # ✅ RERUN to display the new message
-            st.rerun()
+            # ✅ RERUN to display the new message ONLY if no survey options to show
+            # If there are survey options, they'll be rendered below and rerun happens on button click
+            if not st.session_state.pending_survey:
+                st.rerun()
+
 
         # STEP 7: Rendering opzioni survey (se presenti)
             if st.session_state.pending_survey and st.session_state.pending_survey.get("opzioni"):
