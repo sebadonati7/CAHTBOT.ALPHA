@@ -1131,10 +1131,23 @@ def text_to_speech_button(text: str, key: str, auto_play: bool = False):
     pass
 
 
-def update_backend_metadata(metadata: Dict):
-    """Aggiorna metadata history e sincronizza con backend."""
+def update_backend_metadata(metadata):
+    """Aggiorna lo stato della specializzazione basandosi sui dati del triage."""
     st.session_state.metadata_history.append(metadata)
-    st.session_state.backend.sync({"event": "metadata_update", "metadata": metadata})
+    
+    # NUOVO: Check automatico urgenza alta
+    urgenza = metadata.get("urgenza", 0)
+    if urgenza >= 4 and not st.session_state.get("emergency_level"):
+        emergency_level = assess_emergency_level("", metadata)
+        if emergency_level:
+            st.session_state.emergency_level = emergency_level
+    
+    # Resto del codice esistente
+    areas = [m.get("area") for m in st.session_state.metadata_history if m.get("area")]
+    if areas.count("Trauma") >= 2:
+        st.session_state.specialization = "Ortopedia"
+    elif areas.count("Psichiatria") >= 2:
+        st.session_state.specialization = "Psichiatria"
 
 
 def save_structured_log():
@@ -1858,32 +1871,21 @@ def render_main_application():
                     orchestrator,
                     st.session_state.messages, 
                     path,
-                    PHASES[st.session_state.current_phase_idx]["id"]
+                    PHASES[st.session_state.current_phase_idx]["id"],
+                    current_step_name=get_step_display_name(st.session_state.current_step)
                 )
                 
-                # Stream response
-                final_obj = None
-                for chunk in res_gen:
-                    if isinstance(chunk, str):
-                        full_text_vis += chunk
-                        placeholder.markdown(full_text_vis)
-                    elif hasattr(chunk, 'dict'):  # TriageResponse (Pydantic)
-                        final_obj = chunk.dict()
-                        break
-                    elif isinstance(chunk, dict):  # Fallback dict
-                        final_obj = chunk
-                        break
-                
-                typing.empty()
-                if final_obj: 
-                    actual_text = final_obj.get("testo", full_text_vis)
-                    placeholder.markdown(actual_text)
-                    st.session_state.messages.append({"role": "assistant", "content": actual_text})
-                    st.session_state.pending_survey = final_obj
-                    
-                    # Update metadata e check AUSL Romagna
-                    metadata = final_obj.get("metadata", {})
-                    update_backend_metadata(metadata)
+            typing.empty()
+            for chunk in res_gen:
+                if isinstance(chunk, str):
+                    full_text_vis += chunk
+                    placeholder.markdown(full_text_vis)
+                elif hasattr(chunk, 'dict'):  # TriageResponse (Pydantic)
+                    final_obj = chunk.dict()
+                    break
+                elif isinstance(chunk, dict):  # Fallback dict
+                    final_obj = chunk
+                    break
                     
                     # Check emergenze con metadata AI
                     emergency_level = assess_emergency_level(user_input, metadata)
@@ -1902,122 +1904,142 @@ def render_main_application():
                     st.session_state.backend.sync(final_obj.get("metadata", {}))
                     st.rerun()
 
-    # STEP 7: Rendering opzioni survey (se presenti)
-    if st.session_state.pending_survey and st.session_state.pending_survey.get("opzioni"):
-        st.markdown("---")
-        opts = st.session_state.pending_survey["opzioni"]
-        
-        # Debug logging
-        logger.info(f"🔍 Rendering survey options: {opts}")
-        
-        cols = st.columns(len(opts))
-        for i, opt in enumerate(opts):
-            logger.info(f"🔍 Option [{i}]: value='{opt}', type={type(opt)}")
-            
-            if cols[i].button(opt, key=f"btn_{i}", use_container_width=True):
-                if opt == "Altro":
-                    st.session_state.show_altro = True
-                    st.rerun()
-                else:
-                    st.session_state.messages.append({"role": "user", "content": opt})
+        # STEP 7: Rendering opzioni survey (se presenti)
+            if st.session_state.pending_survey and st.session_state.pending_survey.get("opzioni"):
+                st.markdown("---")
+                opts = st.session_state.pending_survey["opzioni"]
+                logger.info(f"🔍 Rendering survey options: {opts}")
+                cols = st.columns(len(opts))
+                for i, opt in enumerate(opts):
+                    logger.info(f"🔍 Option [{i}]: value='{opt}', type={type(opt)}")
                     
-                    current_step = st.session_state.current_step
-                    step_name = current_step.name
-                    
-                    # Validazione completa per tutti gli step
-                    if current_step == TriageStep.LOCATION:
-                        is_valid, normalized = InputValidator.validate_location(opt)
-                        if is_valid:
-                            st.session_state.collected_data[step_name] = normalized
-                            st.session_state.user_comune = normalized
-                            logger.info(f"✅ Location validated: {normalized}")
-                    elif current_step == TriageStep.CHIEF_COMPLAINT:
-                        st.session_state.collected_data[step_name] = opt
-                    elif current_step == TriageStep.PAIN_SCALE:
-                        is_valid, pain_value = InputValidator.validate_pain_scale(opt)
-                        if is_valid:
-                            st.session_state.collected_data[step_name] = pain_value
-                        else:
+                    if cols[i].button(opt, key=f"btn_{i}", use_container_width=True):
+                        current_step = st.session_state.current_step
+                        step_name = current_step.name
+                        
+                        # SECONDA: Validazione E salvataggio PRIMA di advance_step()
+                        validation_success = False
+                        
+                        if current_step == TriageStep.LOCATION:
+                            is_valid, normalized = InputValidator.validate_location(opt)
+                            if is_valid:
+                                st.session_state.collected_data[step_name] = normalized
+                                st.session_state.user_comune = normalized
+                                validation_success = True
+                                logger.info(f"✅ Location validated: {normalized}")
+                            else:
+                                st.warning(f"⚠️ Comune '{opt}' non valido. Riprova.")
+                                st.session_state.pending_survey = None
+                                st.rerun()
+                                
+                        elif current_step == TriageStep.CHIEF_COMPLAINT:
                             st.session_state.collected_data[step_name] = opt
-                    elif current_step == TriageStep.RED_FLAGS:
-                        is_valid, flags = InputValidator.validate_red_flags(opt)
-                        st.session_state.collected_data[step_name] = flags
-                    elif current_step == TriageStep.ANAMNESIS:
-                        # Prova a estrarre età se presente
-                        is_valid, age = InputValidator.validate_age(opt)
-                        if is_valid:
-                            st.session_state.collected_data['age'] = age
-                        st.session_state.collected_data[step_name] = opt
+                            validation_success = True
+                            
+                        elif current_step == TriageStep.PAIN_SCALE:
+                            is_valid, pain_value = InputValidator.validate_pain_scale(opt)
+                            if is_valid: 
+                                st.session_state.collected_data[step_name] = pain_value
+                                validation_success = True
+                            else:
+                                st.session_state.collected_data[step_name] = opt
+                                validation_success = True
+                                
+                        elif current_step == TriageStep.RED_FLAGS: 
+                            is_valid, flags = InputValidator.validate_red_flags(opt)
+                            st.session_state.collected_data[step_name] = flags
+                            validation_success = True
+                            
+                        elif current_step == TriageStep.ANAMNESIS:
+                            is_valid, age = InputValidator.validate_age(opt)
+                            if is_valid:
+                                st.session_state.collected_data['age'] = age
+                            st.session_state.collected_data[step_name] = opt
+                            validation_success = True
+                        
                     elif current_step == TriageStep.DISPOSITION:
                         st.session_state.collected_data[step_name] = opt
+                        validation_success = True
                     
+                    # TERZA: Clear pending survey PRIMA di advance
                     st.session_state.pending_survey = None
                     
-                    # Usa advance_step() per progredire
-                    if advance_step():
-                        logger.info(f"Advanced to step: {st.session_state.current_step.name}")
-                    
-                    # Mantieni compatibilità con current_phase_idx
-                    if st.session_state.current_phase_idx < len(PHASES) - 1:
-                        st.session_state.current_phase_idx += 1
+                    # QUARTA:  Avanza SOLO se validazione OK
+                    if validation_success: 
+                        advance_result = advance_step()
+                        logger.info(f"✅ Step completed: {step_name}, advanced:  {advance_result}")
+                        
+                        # Mantieni compatibilità con current_phase_idx
+                        if st.session_state.current_phase_idx < len(PHASES) - 1:
+                            st.session_state.current_phase_idx += 1
+                    else:
+                        logger.warning(f"⚠️ Validation failed for step {step_name}")
                     
                     st.rerun()
         
-        # Gestione input personalizzato "Altro"
-        if st.session_state.get("show_altro"):
+        if st. session_state.get("show_altro"):
             st.markdown("<div class='fade-in'>", unsafe_allow_html=True)
             c1, c2 = st.columns([4, 1])
-            val = c1.text_input("Dettaglia qui:", placeholder="Scrivi...", key="altro_input")
-            if c2.button("X", key="cancel_altro"):
+            val = c1.text_input("Dettaglia qui:", placeholder="Scrivi.. .", key="altro_input")
+            if c2.button("✖", key="cancel_altro"):
                 st.session_state.show_altro = False
                 st.rerun()
             if val and st.button("Invia", key="send_custom_input_btn"):
-                # Valida e salva risposta custom
                 st.session_state.messages.append({"role": "user", "content": val})
                 
                 current_step = st.session_state.current_step
-                step_name = current_step.name
+                step_name = current_step. name
+                validation_success = False
                 
-                # Salva il dato in collected_data con validazione
-                if current_step == TriageStep.LOCATION:
+                # STESSA logica di validazione del blocco precedente
+                if current_step == TriageStep. LOCATION:
                     is_valid, normalized = InputValidator.validate_location(val)
                     if is_valid:
                         st.session_state.collected_data[step_name] = normalized
-                        st.session_state.user_comune = normalized
+                        st.session_state. user_comune = normalized
+                        validation_success = True
                     else:
                         st.warning("⚠️ Comune non riconosciuto. Inserisci un comune dell'Emilia-Romagna.")
                         st.rerun()
-                elif current_step == TriageStep.CHIEF_COMPLAINT:
-                    st.session_state.collected_data[step_name] = val
+                        
+                elif current_step == TriageStep.CHIEF_COMPLAINT: 
+                    st.session_state. collected_data[step_name] = val
+                    validation_success = True
+                    
                 elif current_step == TriageStep.PAIN_SCALE:
-                    is_valid, pain_value = InputValidator.validate_pain_scale(val)
-                    if is_valid:
+                    is_valid, pain_value = InputValidator. validate_pain_scale(val)
+                    if is_valid: 
                         st.session_state.collected_data[step_name] = pain_value
                     else:
                         st.session_state.collected_data[step_name] = val
-                elif current_step == TriageStep.RED_FLAGS:
+                    validation_success = True
+                    
+                elif current_step == TriageStep.RED_FLAGS: 
                     is_valid, flags = InputValidator.validate_red_flags(val)
                     st.session_state.collected_data[step_name] = flags
+                    validation_success = True
+                    
                 elif current_step == TriageStep.ANAMNESIS:
                     is_valid, age = InputValidator.validate_age(val)
                     if is_valid:
                         st.session_state.collected_data['age'] = age
                     st.session_state.collected_data[step_name] = val
-                elif current_step == TriageStep.DISPOSITION:
-                    st.session_state.collected_data[step_name] = val
+                    validation_success = True
+                    
+                elif current_step == TriageStep. DISPOSITION:
+                    st. session_state.collected_data[step_name] = val
+                    validation_success = True
                 
                 st.session_state.pending_survey = None
                 st.session_state.show_altro = False
                 
-                # Usa advance_step() per progredire
-                if advance_step():
-                    logger.info(f"Advanced to step: {st.session_state.current_step.name}")
-                
-                # Mantieni compatibilità con current_phase_idx
-                if st.session_state.current_phase_idx < len(PHASES) - 1:
-                    st.session_state.current_phase_idx += 1
+                if validation_success:
+                    advance_step()
+                    if st.session_state.current_phase_idx < len(PHASES) - 1:
+                        st.session_state.current_phase_idx += 1
                 
                 st.rerun()
+            st.markdown("</div>", unsafe_allow_html=True)
 
 
 def main():
