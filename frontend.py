@@ -1867,42 +1867,70 @@ def render_main_application():
                 path = "C"  # Default standard
                 
                 full_text_vis = ""
-                res_gen = stream_ai_response(
-                    orchestrator,
-                    st.session_state.messages, 
-                    path,
-                    PHASES[st.session_state.current_phase_idx]["id"],
-                    current_step_name=get_step_display_name(st.session_state.current_step)
-                )
+                final_obj = None
                 
-            typing.empty()
-            for chunk in res_gen:
-                if isinstance(chunk, str):
-                    full_text_vis += chunk
-                    placeholder.markdown(full_text_vis)
-                elif hasattr(chunk, 'dict'):  # TriageResponse (Pydantic)
-                    final_obj = chunk.dict()
-                    break
-                elif isinstance(chunk, dict):  # Fallback dict
-                    final_obj = chunk
-                    break
+                try:
+                    res_gen = stream_ai_response(
+                        orchestrator,
+                        st.session_state.messages, 
+                        path,
+                        PHASES[st.session_state.current_phase_idx]["id"]
+                    )
                     
-                    # Check emergenze con metadata AI
+                    typing.empty()
+                    
+                    # Consume the generator
+                    for chunk in res_gen:
+                        if isinstance(chunk, str):
+                            full_text_vis += chunk
+                            placeholder.markdown(full_text_vis)
+                        elif hasattr(chunk, 'dict'):  # TriageResponse (Pydantic)
+                            final_obj = chunk.dict()
+                        elif isinstance(chunk, dict):  # Fallback dict
+                            final_obj = chunk
+                
+                except Exception as e:
+                    logger.error(f"Error during AI generation: {e}", exc_info=True)
+                    full_text_vis = "Mi dispiace, si è verificato un errore. Riprova."
+                    placeholder.error(full_text_vis)
+            
+            # ✅ CRITICAL FIX: Add assistant message to session state
+            if full_text_vis:
+                st.session_state.messages.append({
+                    "role": "assistant",
+                    "content": full_text_vis
+                })
+                logger.info(f"✅ Assistant message added: {len(full_text_vis)} chars")
+            
+            # Process metadata and survey options (outside the with block)
+            if final_obj:
+                metadata = final_obj.get("metadata", {})
+                
+                # Check for emergencies with metadata
+                if metadata:
                     emergency_level = assess_emergency_level(user_input, metadata)
                     if emergency_level:
                         st.session_state.emergency_level = emergency_level
                         if emergency_level == EmergencyLevel.BLACK:
                             st.session_state.critical_alert = True
                         render_emergency_overlay(emergency_level)
-                    
-                    urgency = metadata.get("urgenza", 3)
-                    comune_utente = st.session_state.get("user_comune")
-                    
-                    if comune_utente and should_show_ps_wait_times(comune_utente, urgency):
-                        render_ps_wait_times_alert(comune_utente, urgency, has_cau_alternative=(3.0 <= urgency < 4.5))
-                    
-                    st.session_state.backend.sync(final_obj.get("metadata", {}))
-                    st.rerun()
+                
+                # Check survey options
+                if final_obj.get("survey"):
+                    st.session_state.pending_survey = final_obj["survey"]
+                elif final_obj.get("opzioni"):
+                    # Handle case where options are at top level
+                    st.session_state.pending_survey = final_obj
+                
+                # Backend sync
+                if metadata:
+                    st.session_state.backend.sync(metadata)
+            
+            # ✅ RERUN to display the new message ONLY if no survey options to show
+            # If there are survey options, they'll be rendered below and rerun happens on button click
+            if not st.session_state.pending_survey:
+                st.rerun()
+
 
         # STEP 7: Rendering opzioni survey (se presenti)
             if st.session_state.pending_survey and st.session_state.pending_survey.get("opzioni"):
