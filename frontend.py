@@ -19,6 +19,85 @@ from enum import Enum
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 import groq
+# --- LOGICA DI RICERCA SANITARIA TERRITORIALE ---
+
+def get_all_available_services():
+    """Analizza tutti i JSON e crea un catalogo unico di servizi e tipologie."""
+    catalog = set()
+    files = ["master_kb.json", "FARMACIE_EMILIA.json", "FARMACIE_ROMAGNA.json"]
+    
+    for f_name in files:
+        if os.path.exists(f_name):
+            try:
+                with open(f_name, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+                    # Gestione strutture (master_kb ha chiave 'facilities') o farmacie (lista)
+                    items = data.get('facilities', []) if isinstance(data, dict) else data
+                    for item in items:
+                        if item.get('tipologia'): catalog.add(item['tipologia'])
+                        for s in item.get('servizi_disponibili', []):
+                            catalog.add(s)
+            except: continue
+    return sorted([s for s in catalog if s])
+
+def find_facilities_smart(query_service, query_comune):
+    """
+    Ricerca gerarchica e 'Filtro Intelligente': 
+    3=Stesso Comune, 2=Stesso Distretto, 1=Stessa Provincia.
+    Implementa substring matching per trovare 'visita' in 'visita ginecologica'.
+    """
+    results = []
+    files = ["master_kb.json", "FARMACIE_EMILIA.json", "FARMACIE_ROMAGNA.json"]
+    
+    all_items = []
+    for f_name in files:
+        if os.path.exists(f_name):
+            with open(f_name, 'r', encoding='utf-8') as f:
+                d = json.load(f)
+                all_items.extend(d.get('facilities', []) if isinstance(d, dict) else d)
+
+    qs = query_service.lower()
+    qc = query_comune.lower()
+
+    for item in all_items:
+        # Match servizio/tipologia (Logica 'Fuzzy' e Substring)
+        servizi = [s.lower() for s in item.get('servizi_disponibili', [])]
+        tipo = item.get('tipologia', '').lower()
+        
+        # Verifica se la query è contenuta nel tipo o in uno dei servizi (es: 'visita' in 'visita medica')
+        match_servizio = qs in tipo or any(qs in s for s in servizi)
+        
+        if match_servizio:
+            score = 0
+            # Punteggio vicinanza basato su testo
+            item_comune = item.get('comune', '').lower()
+            item_dist = item.get('distretto', '').lower()
+            item_prov = item.get('provincia', '').lower()
+
+            if qc == item_comune: score = 3
+            elif qc in item_dist or item_dist in qc: score = 2
+            elif qc in item_prov or item_prov in qc: score = 1
+            
+            if score > 0:
+                results.append({"data": item, "score": score})
+
+    # Ordina per score di prossimità e limita a 5
+    results.sort(key=lambda x: x['score'], reverse=True)
+    return [r['data'] for r in results[:5]]
+
+def make_gmaps_link(item):
+    """Crea URL Google Maps pulito senza bisogno di coordinate."""
+    q = f"{item.get('nome','')} {item.get('indirizzo','')} {item.get('comune','')}"
+    # Formattazione URL corretta per la ricerca
+    query_encoded = q.replace(' ', '+').replace(',', '+')
+    return f"[https://www.google.com/maps/search/?api=1&query=](https://www.google.com/maps/search/?api=1&query=){query_encoded}"
+
+def make_gmaps_link(item):
+    """Crea URL Google Maps pulito senza bisogno di coordinate."""
+    q = f"{item.get('nome','')} {item.get('indirizzo','')} {item.get('comune','')}"
+    # Formattazione URL corretta
+    query_encoded = q.replace(' ', '+').replace(',', '+')
+    return f"[https://www.google.com/maps/search/?api=1&query=](https://www.google.com/maps/search/?api=1&query=){query_encoded}"
 
 # --- CONFIGURAZIONE LOGGING E AMBIENTE ---
 # (Qui puoi procedere con la configurazione del logging o della pagina Streamlit)
@@ -31,6 +110,14 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="expanded"
 )
+# Inizializzazione Catalogo Servizi nello Session State
+if 'service_catalog' not in st.session_state:
+    try:
+        st.session_state.service_catalog = get_all_available_services()
+        logger.info(f"Catalogo servizi pronto: {len(st.session_state.service_catalog)} voci.")
+    except Exception as e:
+        # Fallback se i file mancano
+        st.session_state.service_catalog = ["Pronto Soccorso", "CAU", "Guardia Medica", "Farmacia"]
 
 # --- STILI CSS AVANZATI ---
 st.markdown("""
@@ -55,8 +142,8 @@ st.markdown("""
 
 # --- COSTANTI DI SISTEMA ---
 MODEL_CONFIG = {
-    "triage": "llama-3.1-8b-instant",
-    "complex": "llama-3.3-70b-versatile",  # <--- Cambiato da 3.1 a 3.3
+    "triage": "llama-3.3-70b-versatile",
+    "complex": "llama-3.1-8b-instant",  
     "fallback": "gemini-2.5-flash" 
 }
 
@@ -111,6 +198,21 @@ class TriageStep(Enum):
     ANAMNESIS = 5          # Età, farmaci, allergie (obbligatorio)
     DISPOSITION = 6        # Verdetto finale (generato dal sistema)
 
+# --- PARTE 2: Opzioni Fallback Predefinite ---
+TRIAGE_FALLBACK_OPTIONS = {
+    "LOCATION": ["Bologna", "Modena", "Parma", "Reggio Emilia", "Ferrara", "Ravenna", "Rimini", "Altro comune ER"],
+    "CHIEF_COMPLAINT": ["Dolore", "Febbre", "Trauma/Caduta", "Difficoltà respiratorie", "Problemi gastrointestinali", "Altro sintomo"],
+    "PAIN_SCALE": ["1-3 (Lieve)", "4-6 (Moderato)", "7-8 (Forte)", "9-10 (Insopportabile)", "Nessun dolore"],
+    "RED_FLAGS": ["Sì, ho sintomi gravi", "No, nessun sintomo preoccupante", "Non sono sicuro/a"],
+    "ANAMNESIS": ["Fornisco informazioni", "Preferisco non rispondere", "Non applicabile"],
+    "DISPOSITION": ["Mostra raccomandazione finale"]
+}
+
+def get_fallback_options(step: TriageStep) -> List[str]:
+    """Recupera le opzioni di emergenza se l'AI non risponde correttamente."""
+    options = TRIAGE_FALLBACK_OPTIONS.get(step.name, ["Continua", "Annulla"])
+    logger.info(f"Fallback attivato per {step.name}")
+    return options
 # PARTE 1: Sistema Emergenze a Livelli
 class EmergencyLevel(Enum):
     """
@@ -791,38 +893,69 @@ def get_fallback_options(step: TriageStep) -> List[str]:
     options = FALLBACK_MAP.get(step, ["Continua", "Annulla"])
     logger.info(f"Fallback options for {step.name}: {len(options)} choices")
     return options
+def get_fallback_options(step: TriageStep) -> List[str]:
+    """
+    Restituisce opzioni predefinite per lo step corrente se l'AI fallisce.
+    Utilizza la costante globale TRIAGE_FALLBACK_OPTIONS.
+    """
+    # Recuperiamo le opzioni usando il nome della chiave nell'enum
+    options = TRIAGE_FALLBACK_OPTIONS.get(step.name, ["Continua", "Annulla"])
+    
+    logger.info(f"Fallback attivato per lo step {step.name}: generate {len(options)} opzioni.")
+    return options
 
-# --- UI COMPONENTS ---
-# PARTE 3: Header con Progress Bar e Badge Integrati
-def render_header(current_phase):
+def render_header(current_phase=None):
     """
-    Renderizza header con progress bar, badge urgenza e titolo.
+    Renderizza l'header dell'applicazione in modalità 'Silent Triage'.
+    Versione Ottimizzata:
+    - Rimosso ogni banner di allerta (anche per codici rossi) per velocità.
+    - Focus su navigazione e consapevolezza del progresso.
+    - Efficienza: Utilizza stili inline per evitare dipendenze CSS esterne pesanti.
     """
-    render_progress_bar()
+    # 1. Feedback Visivo (Progress Bar)
+    # Assicurati che render_progress_bar() sia definita nel tuo frontend.py
+    try:
+        render_progress_bar()
+    except Exception as e:
+        logger.warning(f"Impossibile renderizzare progress bar: {e}")
     
-    if st.session_state.metadata_history:
-        render_urgency_badge()
+    # 2. Badge Urgenza Discreto
+    # Mostra il colore dell'urgenza rilevata dai metadati senza messaggi bloccanti
+    if st.session_state.get('metadata_history'):
+        try:
+            render_urgency_badge()
+        except Exception as e:
+            logger.debug(f"Badge urgenza non disponibile: {e}")
     
+    # 3. Struttura Titolo e Contatore Step
     current_step = st.session_state.current_step
-    step_display_name = get_step_display_name(current_step)
     
+    # Helper per il nome visualizzato (se non esiste la funzione, usa il nome dell'Enum)
+    if 'get_step_display_name' in globals():
+        step_display_name = get_step_display_name(current_step)
+    else:
+        step_display_name = current_step.name.replace("_", " ").title()
+    
+    # Calcolo lunghezza totale
+    total_steps = len(TriageStep)
+    
+    # Render HTML centrato e pulito
     st.markdown(f"""
-    <div style='text-align: center; margin: 20px 0;'>
-        <h2 style='color: #1f2937; margin: 0;'>🩺 AI Health Navigator</h2>
-        <p style='color: #6b7280; font-size: 1.1em; margin: 5px 0;'>
-            <strong>{step_display_name}</strong> (Step {current_step.value}/{len(TriageStep)})
-        </p>
+    <div style='text-align: center; margin: 10px 0 25px 0; font-family: sans-serif;'>
+        <h2 style='color: #1f2937; margin: 0; font-size: 1.8em;'>🩺 AI Health Navigator</h2>
+        <div style='margin-top: 10px;'>
+            <span style='background-color: #f3f4f6; color: #4b5563; padding: 6px 16px; 
+                         border-radius: 25px; font-size: 0.95em; font-weight: 600;
+                         border: 1px solid #e5e7eb;'>
+                {step_display_name} <span style='color: #9ca3af; font-weight: 400; margin-left: 5px;'>|</span> 
+                <span style='color: #3b82f6; margin-left: 5px;'>Passaggio {current_step.value} di {total_steps}</span>
+            </span>
+        </div>
     </div>
     """, unsafe_allow_html=True)
-    
-    if st.session_state.get('emergency_level'):
-        emergency_level = st.session_state.emergency_level
-        if emergency_level not in [EmergencyLevel.RED, EmergencyLevel.BLACK]:
-            rule = EMERGENCY_RULES[emergency_level]
-            st.warning(f"**{rule['message']}**\n\nUtilizza la sezione 📍 Strutture Sanitarie Vicine per trovare il PS più vicino.")
-    
-    logger.debug(f"Header rendered for step: {current_step.name}")
 
+    # Logging per monitoraggio efficacia
+    logger.info(f"Header renderizzato con successo per lo step {current_step.name} (Valore: {current_step.value})")
 
 def render_sidebar(pharmacy_db):
     with st.sidebar:
@@ -843,93 +976,58 @@ def render_sidebar(pharmacy_db):
         st.markdown(f"**Specializzazione Backend:** `{st.session_state.specialization}`")
         st.progress((st.session_state.current_phase_idx + 1) / len(PHASES))
         
-        # PARTE 2: Expander Strutture Sanitarie Vicine con Geolocalizzazione
-        with st.expander("📍 Strutture Sanitarie Vicine"):
-            comune_input = st.text_input("Inserisci Comune:", key="geo_comune", placeholder="es. Bologna")
+        # PARTE 2: RICERCA SERVIZI (VERSIONE OTTIMIZZATA) ---
+        with st.expander("📍 Ricerca Servizi e Strutture"):
+            st.markdown("<small>Scrivi il servizio o la specialità (es. *Ginecologia* o *Visita*).</small>", unsafe_allow_html=True)
             
-            facility_type_map = {
-                "Pronto Soccorso": "pronto_soccorso",
-                "CAU (Continuità Assistenziale)": "cau",
-                "Guardia Medica": "guardia_medica",
-                "Farmacie": "farmacie"
-            }
-            facility_label = st.selectbox("Tipo struttura:", list(facility_type_map.keys()), key="facility_type_select")
-            facility_type = facility_type_map[facility_label]
+            # A. Input Comune (Prende il valore dal triage se l'utente lo ha già inserito)
+            if not st.session_state.get('user_comune'):
+                c_input = st.text_input(
+                "In quale comune?", 
+                key="sidebar_geo_comune", 
+                value=st.session_state.get('user_comune', ''),
+                placeholder="es. Cento"
+            )
             
-            col1, col2 = st.columns(2)
-            max_distance = col1.slider("Raggio massimo (km)", 5, 100, 50, key="max_dist_slider")
-            max_results = col2.slider("Max risultati", 1, 10, 3, key="max_results_slider")
+            # B. Selezione Servizio (Tendina con ricerca dinamica integrata)
+            s_input = st.selectbox(
+                "Di cosa hai bisogno?",
+                options=st.session_state.get('service_catalog', ["Caricamento..."]),
+                key="sidebar_service_select",
+                index=None,
+                placeholder="Cerca servizio o prestazione..."
+            )
             
-            if st.button("🔍 Cerca Strutture", use_container_width=True, key="search_facilities_btn"):
-                if comune_input:
-                    coords = get_comune_coordinates(comune_input)
-                    if coords:
-                        user_lat = coords["lat"]
-                        user_lon = coords["lon"]
-                        
-                        facilities = find_nearest_facilities(
-                            user_lat, user_lon,
-                            facility_type=facility_type,
-                            max_results=max_results,
-                            max_distance_km=max_distance
-                        )
-                        
-                        if facilities:
-                            st.success(f"✅ Trovate {len(facilities)} strutture")
-                            
-                            area_type = get_area_type_from_comune(comune_input)
-                            
-                            # Mostra card risultati
-                            for idx, facility in enumerate(facilities, 1):
-                                distance = facility.get('distance_km', 0)
-                                eta = estimate_eta(distance, area_type)
-                                
-                                with st.container():
-                                    st.markdown(f"**{idx}. {facility.get('nome', 'N/D')}**")
-                                    st.markdown(f"📍 {facility.get('indirizzo', 'N/D')} - {facility.get('comune', 'N/D')}")
-                                    st.markdown(f"📞 {facility.get('telefono', 'N/D')}")
-                                    if facility.get('orari'):
-                                        st.markdown(f"🕒 {facility['orari']}")
-                                    if facility.get('H24'):
-                                        st.markdown("🟢 **Aperto H24**")
-                                    st.markdown(f"🚗 Distanza: **{distance} km** - ETA: **~{eta['duration_minutes']} min**")
-                                    st.divider()
-                            
-                            # Mappa Folium
-                            m = folium.Map(location=[user_lat, user_lon], zoom_start=11)
-                            
-                            # Marker utente (blu)
-                            folium.Marker(
-                                [user_lat, user_lon],
-                                popup=f"📍 La tua posizione<br>{comune_input}",
-                                icon=folium.Icon(color="blue", icon="home", prefix="fa")
-                            ).add_to(m)
-                            
-                            # Marker strutture (rosso)
-                            for facility in facilities:
-                                f_lat = facility.get('latitudine') or facility.get('lat')
-                                f_lon = facility.get('longitudine') or facility.get('lon')
-                                if f_lat and f_lon:
-                                    popup_text = (
-                                        f"<b>{facility.get('nome', 'N/D')}</b><br>"
-                                        f"{facility.get('indirizzo', 'N/D')}<br>"
-                                        f"📞 {facility.get('telefono', 'N/D')}<br>"
-                                        f"🚗 {facility.get('distance_km', 0)} km"
-                                    )
-                                    folium.Marker(
-                                        [f_lat, f_lon],
-                                        popup=folium.Popup(popup_text, max_width=300),
-                                        icon=folium.Icon(color="red", icon="plus", prefix="fa")
-                                    ).add_to(m)
-                            
-                            st_folium(m, height=400, width=700)
-                        else:
-                            st.warning(f"⚠️ Nessuna struttura trovata entro {max_distance}km da {comune_input}")
-                    else:
-                        st.error(f"❌ Comune '{comune_input}' non riconosciuto. Usa comuni dell'Emilia-Romagna.")
+            # C. Pulsante di Esecuzione
+            if st.button("🔍 Cerca e Invia in Chat", use_container_width=True, key="exec_search_btn"):
+                if not c_input or not s_input:
+                    st.warning("⚠️ Per favore, inserisci sia il comune che il servizio.")
                 else:
-                    st.warning("⚠️ Inserisci un comune per iniziare la ricerca")
-        
+                    with st.spinner("Consultando i database territoriali..."):
+                        found = find_facilities_smart(s_input, c_input)
+                    
+                    if found:
+                        # 1. Messaggio professionale per la chat
+                        msg = f"### 📍 Risultati per: {s_input}\n"
+                        msg += f"Analisi territoriale effettuata per il comune di: **{c_input}**\n\n---\n"
+                        
+                        for i, r in enumerate(found, 1):
+                            link = make_gmaps_link(r)
+                            contatti = r.get('contatti', {})
+                            tel = contatti.get('telefono') or contatti.get('telephone') or "N/D"
+                            
+                            msg += f"**{i}. {r['nome']}**\n"
+                            msg += f"🏢 *{r.get('tipologia', 'Servizio Sanitario')}*\n"
+                            msg += f"📍 {r['indirizzo']} ({r['comune']})\n"
+                            msg += f"📞 {tel} | [🚗 Apri Navigatore Maps]({link})\n\n"
+                        
+                        # 2. Aggiunta alla cronologia chat
+                        st.session_state.messages.append({"role": "assistant", "content": msg})
+                        st.success("✅ Strutture inviate nella chat!")
+                        st.rerun()
+                    else:
+                        st.error("❌ Nessuna struttura trovata in questa zona.")
+
         # PARTE 3: Expander Accessibilità
         st.divider()
         
@@ -996,171 +1094,94 @@ def render_sidebar(pharmacy_db):
                 st. rerun()
 
 
-def render_disclaimer():
-    st.markdown("""
-        <div class='disclaimer-box'>
-            <b>CONSENSO INFORMATO:</b><br>
-            1.  Questo sistema effettua solo <b>Triage</b> e non fornisce diagnosi mediche. <br>
-            2. Le informazioni sono elaborate da un'AI e possono contenere inesattezze.<br>
-            3. Per emergenze chiamare il <b>118</b>.<br>
-            4. I dati sono trasmessi in forma protetta al backend per la gestione clinica. 
-        </div>
-    """, unsafe_allow_html=True)
+# --- SESSION STATE, LOGICA DI AVANZAMENTO E GESTIONE DATI ---
 
-
-def get_step_display_name(step: TriageStep) -> str:
-    """Ottiene nome human-readable per step."""
-    names = {
-        TriageStep.LOCATION: "📍 Localizzazione",
-        TriageStep.CHIEF_COMPLAINT:  "🤒 Sintomo Principale",
-        TriageStep.PAIN_SCALE:  "📊 Intensità Dolore",
-        TriageStep.RED_FLAGS:  "🚨 Segnali di Allarme",
-        TriageStep.ANAMNESIS: "📝 Storia Clinica",
-        TriageStep.DISPOSITION: "🏥 Raccomandazione"
-    }
-    return names. get(step, "Triage")
-
-
-def render_progress_bar():
-    """Renderizza barra progresso basata su step corrente."""
-    progress = st.session_state.current_step.value / len(TriageStep)
-    st.progress(progress)
-
-
-def render_urgency_badge():
-    """Renderizza badge con livello urgenza corrente."""
-    if st.session_state.metadata_history:
-        urgency = st.session_state.metadata_history[-1]. get("urgenza", 3)
-        colors = {1: "#10b981", 2: "#3b82f6", 3: "#f59e0b", 4: "#f97316", 5: "#dc2626"}
-        color = colors.get(urgency, "#6b7280")
-        st.markdown(f"""
-        <div style='background:  {color}; color: white; padding: 5px 15px; 
-                    border-radius: 20px; text-align: center; width: fit-content; margin: 0 auto;'>
-            Urgenza: {urgency}
-        </div>
-        """, unsafe_allow_html=True)
-
-
-# --- SESSION STATE E FUNZIONI AVANZAMENTO ---
 def init_session():
-    """Inizializza stato sessione con supporto State Machine."""
+    """Inizializza lo stato della sessione allineato con il sistema di Privacy."""
     if "session_id" not in st.session_state:
         st.session_state.session_id = str(uuid.uuid4())
         st.session_state.messages = []
-        st.session_state.current_step = TriageStep. LOCATION
-        st.session_state. current_phase_idx = 0
+        st.session_state.current_step = TriageStep.LOCATION
+        st.session_state.current_phase_idx = 0
         st.session_state.collected_data = {}
-        st. session_state.step_completed = {step: False for step in TriageStep}
+        st.session_state.step_completed = {step: False for step in TriageStep}
         st.session_state.metadata_history = []
-        st. session_state.pending_survey = None
-        st.session_state. gdpr_consent = False
-        st.session_state. specialization = "Generale"
+        st.session_state.pending_survey = None
+        
+        # Allineato con la funzione render_disclaimer
+        st.session_state.privacy_accepted = False 
+        
+        st.session_state.specialization = "Generale"
         st.session_state.backend = BackendClient()
         st.session_state.emergency_level = None
         st.session_state.user_comune = None
-        logger.info(f"New session initialized: {st.session_state. session_id}")
+        logger.info(f"Nuova sessione inizializzata: {st.session_state.session_id}")
 
 
 def advance_step() -> bool:
-    """
-    Avanza allo step successivo del triage.
-    
-    Returns:
-        True se avanzamento riuscito
-        False se già all'ultimo step
-    """
+    """Avanza allo step successivo del triage utilizzando i valori dell'Enum."""
     current = st.session_state.current_step
-    
-    # Usa il VALUE dell'enum (1, 2, 3, .. .) invece dell'istanza
     current_value = current.value
-    
-    # Ottieni il valore massimo dell'enum
     max_value = max(step.value for step in TriageStep)
     
-    # Se non siamo all'ultimo step, avanza
     if current_value < max_value:
-        # Crea il prossimo step usando il value + 1
         next_step = TriageStep(current_value + 1)
         st.session_state.current_step = next_step
-        logger.info(f"Advanced from {current. name} (value={current_value}) to {next_step.name} (value={next_step.value})")
+        logger.info(f"Avanzamento: {current.name} -> {next_step.name}")
         return True
     
-    logger.info(f"Already at last step: {current.name}")
     return False
 
 
 def can_proceed_to_next_step() -> bool:
-    """Verifica se lo step corrente è completato."""
-    current_step = st.session_state. current_step
-    step_name = current_step.name
+    """Verifica se i dati necessari per lo step corrente sono stati raccolti."""
+    current_step = st.session_state.current_step
+    has_data = current_step.name in st.session_state.collected_data
     
-    # Check se esiste dato validato per questo step
-    has_data = step_name in st.session_state.collected_data
-    
-    # Step DISPOSITION è speciale:  si completa automaticamente
     if current_step == TriageStep.DISPOSITION: 
         return True
     
-    logger.debug(f"can_proceed_to_next_step: step={step_name}, has_data={has_data}")
     return has_data
 
 
-def render_disposition_summary():
-    """Renderizza riepilogo finale triage."""
-    st.success("### ✅ Triage Completato")
-    
-    if st.session_state.collected_data:
-        st.json(st.session_state.collected_data)
-    
-    if st.session_state.metadata_history:
-        last_metadata = st.session_state.metadata_history[-1]
-        urgency = last_metadata.get("urgenza", 3)
-        
-        comune = st.session_state.get("user_comune")
-        if comune and should_show_ps_wait_times(comune, urgency):
-            render_ps_wait_times_alert(comune, urgency, has_cau_alternative=(3.0 <= urgency < 4.5))
-    
-    if st.button("🔄 Nuova Sessione", type="primary", key="main_new_session_btn"):
-        for key in list(st.session_state.keys()):
-            del st.session_state[key]
-        st.rerun()
-
-
-def text_to_speech_button(text: str, key: str, auto_play: bool = False):
-    """Placeholder per funzionalità TTS (Text-to-Speech)."""
-    pass
-
-
 def update_backend_metadata(metadata):
-    """Aggiorna lo stato della specializzazione basandosi sui dati del triage."""
+    """
+    Aggiorna lo stato della specializzazione e monitora l'urgenza critica.
+    Viene chiamata ad ogni risposta dell'AI per affinare il percorso.
+    """
     st.session_state.metadata_history.append(metadata)
     
-    # NUOVO: Check automatico urgenza alta
+    # Check automatico urgenza alta (Codice Giallo/Rosso)
     urgenza = metadata.get("urgenza", 0)
     if urgenza >= 4 and not st.session_state.get("emergency_level"):
+        # assess_emergency_level deve essere definita globalmente o importata
         emergency_level = assess_emergency_level("", metadata)
         if emergency_level:
             st.session_state.emergency_level = emergency_level
     
-    # Resto del codice esistente
+    # Logica di specializzazione basata sulla frequenza delle aree rilevate
     areas = [m.get("area") for m in st.session_state.metadata_history if m.get("area")]
     if areas.count("Trauma") >= 2:
         st.session_state.specialization = "Ortopedia"
     elif areas.count("Psichiatria") >= 2:
         st.session_state.specialization = "Psichiatria"
+    elif areas.count("Cardiologia") >= 1 and urgenza >= 4:
+        st.session_state.specialization = "Cardiologia"
 
 
 def save_structured_log():
-    """Salva log strutturato su file JSONL."""
+    """Salva il log strutturato della sessione su file JSONL per il backend."""
     try:
         log_entry = {
             "session_id": st.session_state.session_id,
             "timestamp": datetime.now().isoformat(),
             "collected_data": st.session_state.collected_data,
             "metadata_history": st.session_state.metadata_history,
-            "emergency_level": st.session_state.get("emergency_level")
+            "emergency_level": st.session_state.get("emergency_level"),
+            "specialization": st.session_state.specialization
         }
         
+        # LOG_FILE deve essere definita in alto (es. "triage_logs.jsonl")
         with open(LOG_FILE, 'a', encoding='utf-8') as f:
             f.write(json.dumps(log_entry) + "\n")
         
@@ -1169,19 +1190,65 @@ def save_structured_log():
         logger.error(f"Failed to save structured log: {e}")
 
 
+def text_to_speech_button(text: str, key: str, auto_play: bool = False):
+    """Placeholder per funzionalità TTS (Text-to-Speech) con Web Speech API."""
+    # Implementazione futura con componenti custom o st.audio
+    pass
+
+
 def render_disclaimer():
     """
-    Renderizza disclaimer GDPR con consenso informato.
+    Renderizza il consenso informato completo con blocco di sicurezza. 
+    Copre le finalità del backend e la sicurezza clinica.
     """
     st.markdown("""
-    <div class='disclaimer-box'>
-        <b>CONSENSO INFORMATO:</b><br>
-        1. Questo sistema effettua solo <b>Triage</b> e non fornisce diagnosi mediche.<br>
-        2. Le informazioni sono elaborate da un'AI e possono contenere inesattezze.<br>
-        3. Per emergenze chiamare il <b>118</b>. <br>
-        4. I dati sono trasmessi in forma protetta al backend per la gestione clinica. 
-    </div>
+        <div style='background-color: #fff3cd; padding: 20px; border-radius: 10px; border-left: 5px solid #ffc107; margin-bottom: 20px;'>
+            <h4 style='margin-top:0; color: #856404;'>📄 CONSENSO INFORMATO E PRIVACY</h4>
+            <p style='font-size: 0.9em; color: #856404;'>
+                Benvenuto in <b>AI Health Navigator</b>. Per procedere, è necessario accettare i seguenti termini:
+            </p>
+            <ul style='font-size: 0.85em; color: #856404;'>
+                <li><b>Finalità:</b> Il sistema effettua un <b>Triage digitale</b> per orientarti verso la struttura corretta. <b>Non fornisce diagnosi né terapie.</b></li>
+                <li><b>Trattamento Dati:</b> Le tue risposte (sintomi, comune, età) sono trasmesse in modo sicuro al <b>Backend di Analytics</b> per generare il report SBAR e ottimizzare i flussi sanitari territoriali*.</li>
+                <li><b>Emergenze:</b> In caso di pericolo immediato, interrompi il triage e chiama subito il <b>118</b>.</li>
+                <li><b>Responsabilità:</b> L'AI è un supporto decisionale; la responsabilità finale della consultazione medica resta in capo all'utente.</li>
+            </ul>
+            <p style='font-size: 0.75em; color: #856404; font-style: italic; border-top: 1px solid #ffeeba; padding-top: 10px;'>
+                * I dati saranno utilizzati ai sensi del Regolamento UE 2016/679 (GDPR), Art. 89, per finalità di ricerca e statistica. Previa anonimizzazione irreversibile (Recital 26 GDPR), tali dati potranno essere condivisi con partner terzi per finalità di analisi e sviluppo commerciale.
+            </p>
+        </div>
     """, unsafe_allow_html=True)
+    
+    if not st.session_state.get('privacy_accepted', False):
+        if st.checkbox("Ho letto e accetto i termini del servizio e il trattamento dei dati per fini di triage.", key="privacy_check"):
+            st.session_state.privacy_accepted = True
+            st.success("Consenso registrato. Avvio sistema...")
+            time.sleep(1)
+            st.rerun()
+        else:
+            st.info("⚠️ È necessario accettare il consenso per utilizzare l'assistente.")
+            st.stop()
+
+
+def render_disposition_summary():
+    """Mostra il verdetto finale e resetta la sessione se richiesto."""
+    st.success("### ✅ Triage Completato")
+    
+    if st.session_state.collected_data:
+        st.json(st.session_state.collected_data)
+        # Salvataggio log automatico a fine triage
+        save_structured_log()
+    
+    comune = st.session_state.get("user_comune")
+    if comune and 'should_show_ps_wait_times' in globals():
+        last_urgency = st.session_state.metadata_history[-1].get("urgenza", 3) if st.session_state.metadata_history else 3
+        if should_show_ps_wait_times(comune, last_urgency):
+            render_ps_wait_times_alert(comune, last_urgency)
+    
+    if st.button("🔄 Inizia Nuova Sessione", type="primary", key="main_reset_btn"):
+        for key in list(st.session_state.keys()):
+            del st.session_state[key]
+        st.rerun()
 
 # --- STATO SESSIONE ---
 # PARTE 1: Session State con State Machine
@@ -1857,63 +1924,64 @@ def render_main_application():
                 render_emergency_overlay(emergency_level)
             
             # Aggiunta immediata del messaggio utente
-            st.session_state.messages.append({"role": "user", "content": user_input})
+            st.session_state.messages. append({"role": "user", "content": user_input})
             
             with st.chat_message("assistant", avatar="🩺"):
-                placeholder = st.empty()
-                typing = st.empty()
-                typing.markdown('<div class="typing-indicator">Analisi triage... </div>', unsafe_allow_html=True)
+                placeholder = st. empty()
+                typing = st. empty()
+                typing.markdown('<div class="typing-indicator">Analisi triage...  </div>', unsafe_allow_html=True)
                 
+                phase_id = PHASES[st. session_state. current_phase_idx]["id"]
                 path = "C"  # Percorso standard
                 full_text_vis = ""
                 final_obj = None
                 
                 try:
+                    # ✅ CORREZIONE:  4 parametri esatti come da firma bridge. py
                     res_gen = stream_ai_response(
-                        orchestrator,
-                        st.session_state.messages, 
-                        path,
-                        PHASES[st.session_state.current_phase_idx]["id"],
-                        current_step_name=get_step_display_name(st.session_state.current_step)
+                        orchestrator,           # 1. orchestrator
+                        st.session_state.messages,  # 2. messages
+                        path,                   # 3. path
+                        phase_id                # 4. phase
                     )
                     
                     typing.empty()
                     
                     # Consumo del generatore in tempo reale
-                    for chunk in res_gen:
+                    for chunk in res_gen: 
                         if isinstance(chunk, str):
                             full_text_vis += chunk
                             placeholder.markdown(full_text_vis)
-                        # FIX PYDANTIC: model_dump() al posto di dict()
+                        # ✅ FIX PYDANTIC V2
                         elif hasattr(chunk, 'model_dump'):  
-                            final_obj = chunk.model_dump()
+                            final_obj = chunk. model_dump()
                         elif isinstance(chunk, dict):
                             final_obj = chunk
                     
                 except Exception as e:
                     logger.error(f"Error during AI generation: {e}", exc_info=True)
-                    full_text_vis = "Mi dispiace, si è verificato un errore di connessione con l'AI. Riprova tra un istante."
+                    full_text_vis = "Mi dispiace, si è verificato un errore di connessione con l'AI.  Riprova tra un istante."
                     placeholder.error(full_text_vis)
                 
                 # SALVATAGGIO STATO: Essenziale per non perdere la risposta al rerun
                 if full_text_vis:
-                    st.session_state.messages.append({
+                    st.session_state.messages. append({
                         "role": "assistant",
                         "content": full_text_vis
                     })
-                    logger.info(f"✅ Assistant message added: {len(full_text_vis)} chars")
+                    logger.info(f"✅ Assistant message added:  {len(full_text_vis)} chars")
                 
                 # Gestione Metadata e Survey
-                if final_obj:
+                if final_obj: 
                     metadata = final_obj.get("metadata", {})
                     
                     # Check emergenze dai metadata AI
                     if metadata:
                         update_backend_metadata(metadata)
                         emergency_level = assess_emergency_level(user_input, metadata)
-                        if emergency_level:
-                            st.session_state.emergency_level = emergency_level
-                            if emergency_level == EmergencyLevel.BLACK:
+                        if emergency_level: 
+                            st.session_state. emergency_level = emergency_level
+                            if emergency_level == EmergencyLevel.BLACK: 
                                 st.session_state.critical_alert = True
                             render_emergency_overlay(emergency_level)
                         
@@ -1928,35 +1996,42 @@ def render_main_application():
                                 has_cau_alternative=(3.0 <= urgency < 4.5)
                             )
                     
-                    # Gestione Opzioni (Survey) - il modello usa "opzioni", non "survey"
+                    # Gestione Opzioni (Survey)
                     if final_obj.get("opzioni"):
                         st.session_state.pending_survey = final_obj
-                        logger.info(f"📋 Survey options set: {final_obj.get('opzioni')}")
+                        logger.info(f"📋 Survey options set: {final_obj. get('opzioni')}")
                     
-                    # BACKEND SYNC (Silenzioso): 
-                    # Se hai commentato il client, il check 'if metadata and st.session_state.backend' 
-                    # eviterà errori di 'NoneType' o 'Undefined'.
-                    if metadata and hasattr(st.session_state, 'backend') and st.session_state.backend:
+                    # ✅ BACKEND SYNC SILENZIOSO
+                    if metadata:
                         try:
-                            st.session_state.backend.sync(metadata)
-                        except:
-                            pass # Silenzio totale come richiesto
+                            if hasattr(st.session_state, 'backend') and st.session_state.backend:
+                                st.session_state.backend. sync(metadata)
+                        except Exception as sync_err:
+                            logger.warning(f"Backend sync failed (non-blocking): {sync_err}")
+                            pass  # Silenzio totale, non blocca il chatbot
                 
                 # Rerender per mostrare i bottoni della survey o il messaggio finale
                 st.rerun()
 
     # STEP 7: Rendering opzioni survey (se presenti)
-    if st.session_state.pending_survey and st.session_state.pending_survey.get("opzioni"):
-        st.markdown("---")
-        opts = st.session_state.pending_survey["opzioni"]
-        logger.info(f"🔍 Rendering survey options: {opts}")
-        cols = st.columns(len(opts))
-        for i, opt in enumerate(opts):
+        if st.session_state.pending_survey:
+            st.markdown("---")
+            opts = st.session_state.pending_survey.get("opzioni", [])
+    
+        if not opts or len(opts) == 0:
+            st.caption("⚠️ *L'assistente sta usando opzioni predefinite per garantire la continuità del servizio.*")
+        else:
+            opts = get_fallback_options(st.session_state.current_step)
+            logger.info(f"🔍 Rendering survey options: {opts}")
+            cols = st.columns(len(opts))
+            for i, opt in enumerate(opts):
                     logger.info(f"🔍 Option [{i}]: value='{opt}', type={type(opt)}")
                     
-                    if cols[i].button(opt, key=f"btn_{i}", use_container_width=True):
-                        current_step = st.session_state.current_step
-                        step_name = current_step.name
+                    # La chiave ora include il nome dello step (es. btn_LOCATION_0)
+                    unique_key = f"btn_{st.session_state.current_step.name}_{i}"
+                    if cols[i].button(opt, key=unique_key, use_container_width=True):
+                            current_step = st.session_state.current_step
+                            step_name = current_step.name
                         
                         # SECONDA: Validazione E salvataggio PRIMA di advance_step()
                         validation_success = False
@@ -2018,37 +2093,50 @@ def render_main_application():
                     
                     st.rerun()
         
-        if st. session_state.get("show_altro"):
+        if st.session_state.get("show_altro"):
             st.markdown("<div class='fade-in'>", unsafe_allow_html=True)
+            
+            # Layout con colonna per testo e colonna per tasto chiudi
             c1, c2 = st.columns([4, 1])
-            val = c1.text_input("Dettaglia qui:", placeholder="Scrivi.. .", key="altro_input")
-            if c2.button("✖", key="cancel_altro"):
+            
+            # Chiave univoca per l'input di testo basata sullo step corrente
+            val = c1.text_input(
+                "Dettaglia qui:", 
+                placeholder="Scrivi...", 
+                key=f"altro_input_{st.session_state.current_step.name}"
+            )
+            
+            # Pulsante ANNULLA (✖)
+            if c2.button("✖", key=f"cancel_altro_{st.session_state.current_step.name}"):
                 st.session_state.show_altro = False
                 st.rerun()
-            if val and st.button("Invia", key="send_custom_input_btn"):
+
+            # Pulsante INVIA (Esegue la validazione e il salvataggio)
+            if val and st.button("Invia", key=f"send_custom_{st.session_state.current_step.name}", use_container_width=True):
                 st.session_state.messages.append({"role": "user", "content": val})
                 
                 current_step = st.session_state.current_step
-                step_name = current_step. name
+                step_name = current_step.name
                 validation_success = False
                 
-                # STESSA logica di validazione del blocco precedente
-                if current_step == TriageStep. LOCATION:
+                # --- LOGICA DI VALIDAZIONE DIFFERENZIATA ---
+                if current_step == TriageStep.LOCATION:
                     is_valid, normalized = InputValidator.validate_location(val)
                     if is_valid:
                         st.session_state.collected_data[step_name] = normalized
-                        st.session_state. user_comune = normalized
+                        st.session_state.user_comune = normalized
                         validation_success = True
                     else:
                         st.warning("⚠️ Comune non riconosciuto. Inserisci un comune dell'Emilia-Romagna.")
+                        time.sleep(2)
                         st.rerun()
                         
                 elif current_step == TriageStep.CHIEF_COMPLAINT: 
-                    st.session_state. collected_data[step_name] = val
+                    st.session_state.collected_data[step_name] = val
                     validation_success = True
                     
                 elif current_step == TriageStep.PAIN_SCALE:
-                    is_valid, pain_value = InputValidator. validate_pain_scale(val)
+                    is_valid, pain_value = InputValidator.validate_pain_scale(val)
                     if is_valid: 
                         st.session_state.collected_data[step_name] = pain_value
                     else:
@@ -2056,8 +2144,8 @@ def render_main_application():
                     validation_success = True
                     
                 elif current_step == TriageStep.RED_FLAGS: 
-                    is_valid, flags = InputValidator.validate_red_flags(val)
-                    st.session_state.collected_data[step_name] = flags
+                    # Salviamo i dati come lista per coerenza
+                    st.session_state.collected_data[step_name] = [val]
                     validation_success = True
                     
                 elif current_step == TriageStep.ANAMNESIS:
@@ -2067,21 +2155,21 @@ def render_main_application():
                     st.session_state.collected_data[step_name] = val
                     validation_success = True
                     
-                elif current_step == TriageStep. DISPOSITION:
-                    st. session_state.collected_data[step_name] = val
+                elif current_step == TriageStep.DISPOSITION:
+                    st.session_state.collected_data[step_name] = val
                     validation_success = True
                 
-                st.session_state.pending_survey = None
-                st.session_state.show_altro = False
-                
+                # --- CONCLUSIONE E AVANZAMENTO ---
                 if validation_success:
+                    st.session_state.pending_survey = None
+                    st.session_state.show_altro = False
                     advance_step()
+                    # Se necessario, aggiorna l'indice della fase visuale
                     if st.session_state.current_phase_idx < len(PHASES) - 1:
                         st.session_state.current_phase_idx += 1
-                
-                st.rerun()
+                    st.rerun()
+            
             st.markdown("</div>", unsafe_allow_html=True)
-
 
 def main():
     """Entry point principale che chiama render_main_application."""
