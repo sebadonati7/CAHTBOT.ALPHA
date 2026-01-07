@@ -91,3 +91,67 @@ class SmartRouter:
             "note": "Contatta il tuo medico di base per una valutazione nei prossimi giorni.",
             "distance_km": None
         }
+
+
+def detect_emergency_keywords(user_message: str) -> str:
+    """
+    Rileva keyword di emergenza nel messaggio utente.
+    
+    ✅ NUOVO: Supporto per emergency detection in tempo reale
+    
+    Args:
+        user_message: Messaggio dell'utente
+    
+    Returns:
+        "RED": Emergenza medica critica
+        "ORANGE": Situazione urgente
+        "BLACK": Emergenza psichiatrica
+        "GREEN": Nessuna emergenza rilevata
+    """
+    if not user_message:
+        return "GREEN"
+    
+    text_lower = user_message.lower().strip()
+    
+    # BLACK triggers (emergenza psichiatrica)
+    black_keywords = [
+        "suicidio", "uccidermi", "togliermi la vita", "farla finita",
+        "ammazzarmi", "voglio morire", "non voglio più vivere",
+        "autolesionismo", "tagliarmi", "farmi male"
+    ]
+    
+    for keyword in black_keywords:
+        if keyword in text_lower:
+            logger.error(f"🚨 BLACK EMERGENCY: '{keyword}'")
+            return "BLACK"
+    
+    # RED triggers (emergenza medica critica)
+    red_keywords = [
+        "dolore toracico", "dolore petto", "oppressione torace",
+        "non riesco respirare", "soffoco", "difficoltà respiratoria grave",
+        "perdita di coscienza", "svenuto", "svenimento",
+        "convulsioni", "crisi convulsiva",
+        "emorragia massiva", "sangue abbondante",
+        "paralisi", "metà corpo bloccata"
+    ]
+    
+    for keyword in red_keywords:
+        if keyword in text_lower:
+            logger.error(f"🚨 RED EMERGENCY: '{keyword}'")
+            return "RED"
+    
+    # ORANGE triggers (urgente)
+    orange_keywords = [
+        "dolore addominale acuto", "dolore pancia molto forte",
+        "trauma cranico", "battuto forte testa",
+        "febbre alta", "febbre 39", "febbre 40",
+        "vomito continuo", "vomito sangue",
+        "dolore insopportabile", "dolore lancinante"
+    ]
+    
+    for keyword in orange_keywords:
+        if keyword in text_lower:
+            logger.warning(f"⚠️ ORANGE EMERGENCY: '{keyword}'")
+            return "ORANGE"
+    
+    return "GREEN"

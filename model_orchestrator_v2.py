@@ -88,21 +88,154 @@ class ModelOrchestrator:
             "disposition_prompt": "🎯 FASE FINALE: Genera una sintesi chiara e una raccomandazione sulla struttura."
         }
 
-    def _get_system_prompt(self, path: str, phase: str) -> str:
+    def _build_context_section(self, collected_data: Dict) -> str:
+        """
+        Costruisce la sezione del prompt con i dati già raccolti.
+        
+        ✅ NUOVO: Previene ridondanza nelle domande
+        """
+        if not collected_data:
+            return "DATI GIÀ RACCOLTI: Nessuno"
+        
+        known_slots = []
+        
+        # Mappiamo i dati raccolti in formato leggibile
+        if collected_data.get('LOCATION'):
+            known_slots.append(f"Comune: {collected_data['LOCATION']}")
+        
+        if collected_data.get('CHIEF_COMPLAINT'):
+            known_slots.append(f"Sintomo principale: {collected_data['CHIEF_COMPLAINT']}")
+        
+        if collected_data.get('PAIN_SCALE'):
+            known_slots.append(f"Dolore: {collected_data['PAIN_SCALE']}/10")
+        
+        if collected_data.get('RED_FLAGS'):
+            rf = collected_data['RED_FLAGS']
+            rf_str = rf if isinstance(rf, str) else ', '.join(rf) if isinstance(rf, list) else str(rf)
+            known_slots.append(f"Red flags: {rf_str}")
+        
+        if collected_data.get('age'):
+            known_slots.append(f"Età: {collected_data['age']} anni")
+        
+        if collected_data.get('sex'):
+            known_slots.append(f"Sesso: {collected_data['sex']}")
+        
+        if collected_data.get('pregnant'):
+            known_slots.append(f"Gravidanza: {collected_data['pregnant']}")
+        
+        if collected_data.get('medications'):
+            known_slots.append(f"Farmaci: {collected_data['medications']}")
+        
+        context = "DATI GIÀ RACCOLTI (NON CHIEDERE NUOVAMENTE):\n"
+        context += "\n".join([f"  - {slot}" for slot in known_slots])
+        
+        return context
+
+    def _determine_next_slot(self, collected_data: Dict, current_phase: str) -> str:
+        """
+        Determina il prossimo slot da riempire seguendo il protocollo triage.
+        
+        ✅ NUOVO: Guida l'AI verso il prossimo dato necessario
+        """
+        # Schema priorità (ordine del triage secondo schema INTERAZIONI PZ.txt)
+        if not collected_data.get('LOCATION') and current_phase != "DISPOSITION":
+            return "Comune di residenza (Emilia-Romagna)"
+        
+        if not collected_data.get('CHIEF_COMPLAINT') and current_phase != "DISPOSITION":
+            return "Sintomo principale (descrizione breve)"
+        
+        if not collected_data.get('PAIN_SCALE') and current_phase != "DISPOSITION":
+            return "Intensità dolore (scala 1-10, o 'nessun dolore')"
+        
+        if not collected_data.get('RED_FLAGS') and current_phase != "DISPOSITION":
+            return "Presenza sintomi gravi (dispnea/dolore toracico/sanguinamento/febbre alta)"
+        
+        if not collected_data.get('age') and current_phase != "DISPOSITION":
+            return "Età del paziente"
+        
+        # Fase DISPOSITION o tutti gli slot riempiti
+        if current_phase == "DISPOSITION":
+            return "GENERAZIONE_RACCOMANDAZIONE_FINALE"
+        
+        return "Anamnesi aggiuntiva (farmaci, allergie, condizioni croniche)"
+
+    def _check_emergency_triggers(self, user_message: str, collected_data: Dict) -> Optional[Dict]:
+        """
+        Rileva trigger di emergenza in tempo reale.
+        
+        ✅ NUOVO: Integrazione con sistema di emergenza
+        """
+        if not user_message:
+            return None
+        
+        text_lower = user_message.lower().strip()
+        
+        # RED triggers (emergenza medica)
+        red_keywords = [
+            "dolore toracico", "dolore petto", "oppressione torace",
+            "non riesco respirare", "soffoco", "difficoltà respiratoria grave",
+            "perdita di coscienza", "svenuto", "svenimento",
+            "convulsioni", "crisi convulsiva",
+            "emorragia massiva", "sangue abbondante",
+            "paralisi", "metà corpo bloccata"
+        ]
+        
+        for keyword in red_keywords:
+            if keyword in text_lower:
+                logger.error(f"🚨 RED EMERGENCY detected: '{keyword}'")
+                return {
+                    "testo": "🚨 Rilevata possibile emergenza. Chiama immediatamente il 118.",
+                    "tipo_domanda": "text",
+                    "fase_corrente": "EMERGENCY_OVERRIDE",
+                    "opzioni": None,
+                    "dati_estratti": {},
+                    "metadata": {
+                        "urgenza": 5,
+                        "area": "Emergenza",
+                        "red_flags": [keyword],
+                        "confidence": 1.0,
+                        "fallback_used": False
+                    }
+                }
+        
+        return None
+
+    def _get_system_prompt(self, path: str, phase: str, collected_data: Dict = None) -> str:
+        """
+        Genera system prompt dinamico con contesto dei dati già raccolti.
+        
+        Args:
+            path: Percorso triage (A/B/C)
+            phase: Fase corrente
+            collected_data: Dati già raccolti (✅ NUOVO)
+        """
+        if collected_data is None:
+            collected_data = {}
+            
         path_instruction = self.prompts. get(f"percorso_{path. lower()}", self.prompts["percorso_c"])
         if phase == "DISPOSITION":
             path_instruction = self.prompts["disposition_prompt"]
+        
+        # ✅ NUOVO: Build contesto dinamico
+        context_section = self._build_context_section(collected_data)
+        next_slot_info = self._determine_next_slot(collected_data, phase)
             
         return f"""
         {self.prompts['base_rules']}
         DIRETTIVE ATTUALI:  {path_instruction}
         FASE:  {phase} | PERCORSO: {path}
         
+        {context_section}
+        
+        PROSSIMA INFORMAZIONE DA RACCOGLIERE: {next_slot_info}
+        
         RISPONDI ESCLUSIVAMENTE IN FORMATO JSON:  
         {{
             "testo": "stringa con la domanda o sintesi",
             "tipo_domanda": "survey|scale|text",
             "opzioni": ["Opzione A", "Opzione B"] o null,
+            "fase_corrente": "{phase}",
+            "dati_estratti": {{}},
             "metadata": {{ 
                 "urgenza": 1-5, 
                 "area": "nome_area", 
@@ -113,16 +246,31 @@ class ModelOrchestrator:
         }}
         """
 
-    async def call_ai_streaming(self, messages: List[Dict], path: str, phase: str) -> AsyncGenerator[Union[str, TriageResponse], None]:
+    async def call_ai_streaming(self, messages: List[Dict], path: str, phase: str, collected_data: Dict = None) -> AsyncGenerator[Union[str, TriageResponse], None]:
         """
         Metodo principale con logging dettagliato e modelli aggiornati.
+        
+        ✅ NUOVO: Accetta collected_data per context awareness
         """
-        system_msg = self._get_system_prompt(path, phase)
+        if collected_data is None:
+            collected_data = {}
+        
+        # ✅ NUOVO: Check emergenze prima della generazione
+        if messages:
+            last_user_msg = next((m['content'] for m in reversed(messages) if m.get('role') == 'user'), "")
+            emergency_response = self._check_emergency_triggers(last_user_msg, collected_data)
+            if emergency_response:
+                logger.warning("⚠️ Emergency override attivato")
+                yield emergency_response['testo']
+                yield TriageResponse(**emergency_response)
+                return
+        
+        system_msg = self._get_system_prompt(path, phase, collected_data)
         api_messages = [{"role": "system", "content": system_msg}] + messages[-5:]
         full_response_str = ""
         success = False
 
-        logger.info(f"🎯 call_ai_streaming START | phase={phase}, path={path}")
+        logger.info(f"🎯 call_ai_streaming START | phase={phase}, path={path}, collected_keys={list(collected_data.keys())}")
         logger.info(f"📊 Groq disponibile: {self.groq_client is not None}")
         logger.info(f"📊 Gemini disponibile: {self.gemini_model is not None}")
 

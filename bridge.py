@@ -5,7 +5,7 @@ import streamlit as st
 
 logger = logging.getLogger(__name__)
 
-def stream_ai_response(orchestrator, messages, path, phase) -> Iterator[Union[str, any]]:
+def stream_ai_response(orchestrator, messages, path, phase, collected_data=None) -> Iterator[Union[str, any]]:
     """
     Converte il generatore asincrono in uno sincrono per Streamlit.
     Wrapper con gestione errori robusta e logging dettagliato.
@@ -15,18 +15,25 @@ def stream_ai_response(orchestrator, messages, path, phase) -> Iterator[Union[st
         messages: Lista di messaggi della chat
         path: Percorso triage (A/B/C)
         phase: Fase corrente (es. "ANAMNESIS", "DISPOSITION")
+        collected_data: Dati già raccolti durante la conversazione (✅ NUOVO)
     
     Yields:
         str: Token di testo per streaming incrementale
         TriageResponse: Oggetto finale con metadati
     """
+    # ✅ Validazione input
+    if collected_data is None:
+        collected_data = {}
+    if not isinstance(collected_data, dict):
+        logger.error(f"collected_data deve essere un dizionario, ricevuto {type(collected_data)}")
+        collected_data = {}
     async def _collect():
         items = []
         try:
-            logger.info(f"🔄 Bridge: Avvio collezione asincrona | phase={phase}, path={path}, messages={len(messages)}")
+            logger.info(f"🔄 Bridge: Avvio collezione asincrona | phase={phase}, path={path}, messages={len(messages)}, collected_data_keys={list(collected_data.keys())}")
             
-            # Chiama il metodo streaming dell'orchestratore
-            async for chunk in orchestrator.call_ai_streaming(messages, path, phase):
+            # ✅ Chiama il metodo streaming dell'orchestratore con collected_data
+            async for chunk in orchestrator.call_ai_streaming(messages, path, phase, collected_data):
                 items.append(chunk)
                 
                 # ✅ NUOVO:  Log del tipo di chunk ricevuto
