@@ -33,11 +33,23 @@ class TriageResponse(BaseModel):
     opzioni: Optional[List[str]] = None
     metadata: TriageMetadata
     sbar:  Optional[SBARReport] = None
+    
+    # ✅ NUOVO: Fase protocollo corrente
+    fase_corrente: Optional[str] = Field(
+        default=None, 
+        description="Fase del protocollo triage (LOCATION, PAIN_SCALE, RED_FLAGS, etc.)"
+    )
+    
+    # ✅ NUOVO: Dati estratti dall'ultima risposta utente
+    dati_estratti: Dict[str, Any] = Field(
+        default_factory=dict,
+        description="Dati multipli estratti automaticamente dalla risposta utente"
+    )
 
     @field_validator("opzioni")
     @classmethod
     def validate_options(cls, v: Any, info: Any) -> Any:
-        if info.data. get("tipo_domanda") == QuestionType.SURVEY: 
+        if info.data.get("tipo_domanda") == QuestionType.SURVEY:
             if not v or len(v) < 2:
                 return ["Sì", "No", "Non so"]
         return v

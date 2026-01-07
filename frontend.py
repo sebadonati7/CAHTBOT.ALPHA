@@ -1346,6 +1346,37 @@ def advance_step() -> bool:
     return True
 
 
+def auto_advance_if_ready() -> bool:
+    """
+    Avanza automaticamente quando tutti i dati dello step sono raccolti.
+    
+    ✅ NUOVO: Elimina la necessità di cliccare manualmente "Avanti"
+    
+    Returns:
+        True se l'avanzamento è avvenuto, False altrimenti
+    """
+    current_step = st.session_state.current_step
+    collected = st.session_state.collected_data
+    
+    # Mappa: Step → Campi richiesti
+    requirements = {
+        TriageStep.LOCATION: ['LOCATION'],
+        TriageStep.CHIEF_COMPLAINT: ['CHIEF_COMPLAINT'],
+        TriageStep.PAIN_SCALE: ['PAIN_SCALE'],
+        TriageStep.RED_FLAGS: ['RED_FLAGS'],
+        TriageStep.ANAMNESIS: ['age']
+    }
+    
+    required_fields = requirements.get(current_step, [])
+    
+    # Check se tutti i campi sono presenti e non vuoti
+    if all(field in collected and collected.get(field) for field in required_fields):
+        logger.info(f"✅ Auto-advance: {current_step.name} → completato, avanzamento automatico")
+        return advance_step()
+    
+    return False
+
+
 # PARTE 2: Logging Strutturato per Backend Analytics
 def save_structured_log():
     """
@@ -1890,7 +1921,7 @@ def render_disposition_summary():
                 if key not in keys_to_preserve:
                     del st.session_state[key]
             
-            logger. info("New triage started from disposition")
+            logger.info("New triage started from disposition")
             st.rerun()
     
     with c2:
@@ -2191,12 +2222,13 @@ def render_main_application():
                 final_obj = None
                 
                 try:
-                    # Chiamata streaming con parametri corretti
+                    # ✅ Chiamata streaming con collected_data per context awareness
                     res_gen = stream_ai_response(
                         orchestrator,
                         st. session_state.messages,
                         path,
-                        phase_id
+                        phase_id,
+                        collected_data=st.session_state.collected_data
                     )
                     
                     # Rimuovi subito l'indicatore di caricamento
@@ -2272,6 +2304,17 @@ def render_main_application():
                         if final_obj.get("opzioni"):
                             st.session_state.pending_survey = final_obj
                             logger.info(f"📋 Survey con {len(final_obj['opzioni'])} opzioni")
+                        
+                        # ✅ NUOVO: 7b. Estrazione automatica dati multipli
+                        dati_estratti = final_obj.get("dati_estratti", {})
+                        if dati_estratti and isinstance(dati_estratti, dict):
+                            for key, value in dati_estratti.items():
+                                if value:  # Solo se il valore non è vuoto
+                                    st.session_state.collected_data[key] = value
+                                    logger.info(f"✅ Dato estratto automaticamente: {key} = {value}")
+                            
+                            # ✅ Check auto-advancement dopo estrazione dati
+                            auto_advance_if_ready()
                     
                     # 8. Rerun
                     st.rerun()
