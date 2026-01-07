@@ -128,7 +128,7 @@ def detect_emergency_keywords(user_message: str) -> str:
     # RED triggers (emergenza medica critica)
     red_keywords = [
         "dolore toracico", "dolore petto", "oppressione torace",
-        "non riesco respirare", "soffoco", "difficoltà respiratoria grave",
+        "non riesco respirare", "non riesco a respirare", "soffoco", "difficoltà respiratoria grave",
         "perdita di coscienza", "svenuto", "svenimento",
         "convulsioni", "crisi convulsiva",
         "emorragia massiva", "sangue abbondante",

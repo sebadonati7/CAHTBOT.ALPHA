@@ -2304,6 +2304,17 @@ def render_main_application():
                         if final_obj.get("opzioni"):
                             st.session_state.pending_survey = final_obj
                             logger.info(f"📋 Survey con {len(final_obj['opzioni'])} opzioni")
+                        
+                        # ✅ NUOVO: 7b. Estrazione automatica dati multipli
+                        dati_estratti = final_obj.get("dati_estratti", {})
+                        if dati_estratti and isinstance(dati_estratti, dict):
+                            for key, value in dati_estratti.items():
+                                if value:  # Solo se il valore non è vuoto
+                                    st.session_state.collected_data[key] = value
+                                    logger.info(f"✅ Dato estratto automaticamente: {key} = {value}")
+                            
+                            # ✅ Check auto-advancement dopo estrazione dati
+                            auto_advance_if_ready()
                     
                     # 8. Rerun
                     st.rerun()
