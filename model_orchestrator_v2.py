@@ -1,3 +1,4 @@
+# model_orchestrator_v2.py
 import streamlit as st
 import asyncio
 import json
@@ -5,18 +6,16 @@ import logging
 import re
 import atexit
 from concurrent.futures import ThreadPoolExecutor
-from typing import List, Dict, AsyncGenerator, Union
+from typing import List, Dict, AsyncGenerator, Union, Optional
 from pydantic import ValidationError
 
-# Import dei modelli
 from models import TriageResponse, TriageMetadata, QuestionType
-
-# Import router
 from smart_router import SmartRouter
 
+logger = logging.getLogger(__name__)
 
 class DiagnosisSanitizer:
-    """Blocca diagnosi non autorizzate"""
+    """Blocca diagnosi non autorizzate e prescrizioni farmacologiche."""
     FORBIDDEN_PATTERNS = [
         r"\bdiagnosi\b", r"\bprescrivo\b", r"\bterapia\b",
         r"\bhai\s+(la|il|un[\'a]? )\s+\w+",
@@ -31,59 +30,47 @@ class DiagnosisSanitizer:
         for pattern in DiagnosisSanitizer.FORBIDDEN_PATTERNS:
             if re.search(pattern, text_lower):
                 logging.critical(f"🚨 DIAGNOSI BLOCCATA: {response.testo}")
-                response.testo = "In base ai dati raccolti, la situazione merita un approfondimento.  Potresti descrivermi l'insorgenza?"
+                response.testo = "In base ai dati raccolti, la situazione merita un approfondimento clinico.  Potresti descrivermi meglio da quanto tempo avverti questi sintomi?"
                 response.metadata.confidence = 0.1
                 break
         return response
 
-
 class ModelOrchestrator:
-    def __init__(self):
-        self.groq_key = st.secrets.get("GROQ_API_KEY", "")
-        self.gemini_key = st.secrets.get("GEMINI_API_KEY", "")
-        
-        # ✅ Early validation of API keys
-        if not self.groq_key and not self.gemini_key:
-            logging.error("❌ NO API KEYS CONFIGURED! Check .streamlit/secrets.toml")
-            st.error("⚠️ Configuration error: No API keys found. The chatbot may not work properly.")
-        
-        # Client Async Groq
-        try:
-            from groq import AsyncGroq
-            if self.groq_key:
-                self.groq_client = AsyncGroq(api_key=self.groq_key)
-                logging.info("✅ Groq client initialized")
-            else:
-                self.groq_client = None
-                logging.warning("⚠️ Groq API key missing")
-        except ImportError: 
-            logging.error("❌ AsyncGroq not available, install: pip install groq")
-            self.groq_client = None
-        
-        # Client Gemini
-        if self.gemini_key:
-            try:
-                import google.generativeai as genai
-                genai.configure(api_key=self.gemini_key)
-                self.gemini_model = genai.GenerativeModel("gemini-1.5-flash")
-                logging.info("✅ Gemini model initialized")
-            except Exception as e: 
-                logging.error(f"❌ Gemini initialization failed: {e}")
-                self.gemini_model = None
-        else:
-            self.gemini_model = None
-            logging.warning("⚠️ Gemini API key missing")
-
-        # ThreadPool per fallback
+    """
+    Orchestratore AI con Fallback Groq -> Gemini. 
+    Versione aggiornata per modelli 2025.
+    """
+    def __init__(self, groq_key: str = "", gemini_key: str = ""):
+        self.groq_client = None
+        self.gemini_model = None
         self._executor = ThreadPoolExecutor(max_workers=5)
-        atexit.register(self._cleanup)
-        
-        # Router territoriale
         self.router = SmartRouter()
         self.prompts = self._load_prompts()
+        
+        g_key = groq_key or st.secrets. get("GROQ_API_KEY", "")
+        gem_key = gemini_key or st.secrets.get("GEMINI_API_KEY", "")
+        
+        self.set_keys(groq=g_key, gemini=gem_key)
+        atexit.register(self._cleanup)
+
+    def set_keys(self, groq:  str = "", gemini: str = ""):
+        """Configura o aggiorna le chiavi API in runtime."""
+        try:
+            if groq:
+                from groq import AsyncGroq
+                self.groq_client = AsyncGroq(api_key=groq)
+                logging.info("✅ Groq client initialized")
+            
+            if gemini:
+                import google.generativeai as genai
+                genai.configure(api_key=gemini)
+                # ✅ FIX:   Usa modello aggiornato 2025
+                self.gemini_model = genai.GenerativeModel("gemini-2.0-flash-exp")
+                logging.info("✅ Gemini model initialized (gemini-2.0-flash-exp)")
+        except Exception as e:
+            logging.error(f"❌ Errore configurazione chiavi: {e}")
 
     def _cleanup(self):
-        """Previene memory leak"""
         if hasattr(self, '_executor'):
             self._executor. shutdown(wait=False)
 
@@ -92,13 +79,13 @@ class ModelOrchestrator:
             "base_rules": (
                 "Sei l'AI Health Navigator. NON SEI UN MEDICO.\n"
                 "- SINGLE QUESTION POLICY:  Una sola domanda alla volta.\n"
-                "- NO DIAGNOSI:  Non nominare malattie.\n"
+                "- NO DIAGNOSI:  Non nominare malattie o cure.\n"
                 "- SLOT FILLING: Non chiedere dati già forniti."
             ),
-            "percorso_a": "🚨 EMERGENZA:  Max 3 domande rapide.",
-            "percorso_b": "🆘 SALUTE MENTALE:  Tono empatico.  Hotline:  1522, Telefono Amico.",
-            "percorso_c": "📗 STANDARD: Scala dolore 1-10, anamnesi.",
-            "disposition_prompt": "🎯 FASE FINALE: Genera raccomandazione finale."
+            "percorso_a":  "🚨 EMERGENZA:  Max 3 domande rapide e mirate alla sicurezza territoriale.",
+            "percorso_b": "🆘 SALUTE MENTALE: Tono empatico.  Includere riferimenti se necessario (1522, Telefono Amico).",
+            "percorso_c": "📗 STANDARD: Valuta scala dolore (1-10) e anamnesi recente.",
+            "disposition_prompt": "🎯 FASE FINALE: Genera una sintesi chiara e una raccomandazione sulla struttura."
         }
 
     def _get_system_prompt(self, path: str, phase: str) -> str:
@@ -108,190 +95,135 @@ class ModelOrchestrator:
             
         return f"""
         {self.prompts['base_rules']}
-        DIRETTIVE:  {path_instruction}
-        FASE: {phase} | PERCORSO: {path}
+        DIRETTIVE ATTUALI:  {path_instruction}
+        FASE:  {phase} | PERCORSO: {path}
         
-        RISPONDI SOLO IN JSON: 
+        RISPONDI ESCLUSIVAMENTE IN FORMATO JSON:  
         {{
-            "testo": "domanda o sintesi",
-            "tipo_domanda":  "survey|scale|text",
-            "opzioni": ["A", "B"]|null,
-            "metadata": {{ "urgenza": 1-5, "area": "string", "red_flags": [], "confidence": 0.0-1.0 }}
+            "testo": "stringa con la domanda o sintesi",
+            "tipo_domanda": "survey|scale|text",
+            "opzioni": ["Opzione A", "Opzione B"] o null,
+            "metadata": {{ 
+                "urgenza": 1-5, 
+                "area": "nome_area", 
+                "red_flags":  [], 
+                "confidence": 0.0-1.0,
+                "kb_reference": "PROTOCOLLO_ID" (opzionale)
+            }}
         }}
         """
 
     async def call_ai_streaming(self, messages: List[Dict], path: str, phase: str) -> AsyncGenerator[Union[str, TriageResponse], None]:
-        """Metodo principale con streaming e error handling robusto"""
+        """
+        Metodo principale con logging dettagliato e modelli aggiornati.
+        """
         system_msg = self._get_system_prompt(path, phase)
         api_messages = [{"role": "system", "content": system_msg}] + messages[-5:]
-        full_response = ""
+        full_response_str = ""
         success = False
 
-        # ATTEMPT 1: Groq with timeout
+        logger.info(f"🎯 call_ai_streaming START | phase={phase}, path={path}")
+        logger.info(f"📊 Groq disponibile: {self.groq_client is not None}")
+        logger.info(f"📊 Gemini disponibile: {self.gemini_model is not None}")
+
+        # --- 1. TENTA GROQ ---
         if self.groq_client:
             try:
-                logging.info("Orchestrator: Attempting Groq API call...")
+                logger.info("🔵 Tentativo Groq con llama-3.3-70b-versatile...")
                 stream = await asyncio.wait_for(
-                    self.groq_client.chat.completions.create(
-                        model="llama-3.1-70b-versatile",
+                    self. groq_client.chat.completions.create(
+                        model="llama-3.3-70b-versatile",  # ✅ MODELLO AGGIORNATO
                         messages=api_messages,
                         temperature=0.1,
                         stream=True,
                         response_format={"type": "json_object"}
-                    ),
-                    timeout=30.0
+                    ), timeout=60.0  # ✅ TIMEOUT AUMENTATO
                 )
                 
+                logger.info("✅ Groq stream ricevuto, lettura in corso...")
                 async for chunk in stream:
                     token = chunk.choices[0].delta.content or ""
-                    if token:
-                        full_response += token
-                        yield token
+                    full_response_str += token
                 
+                logger.info(f"✅ Groq completato | Lunghezza: {len(full_response_str)} char")
                 success = True
-                logging.info(f"Orchestrator: Groq completed successfully ({len(full_response)} chars)")
                 
             except asyncio.TimeoutError:
-                logging.error("Orchestrator: Groq timeout after 30s")
+                logger.error("⏱️ Groq TIMEOUT (60 secondi)")
             except Exception as e:
-                logging.error(f"Orchestrator: Groq error - {type(e).__name__}: {str(e)}")
+                logger.error(f"❌ Groq ERROR: {type(e).__name__} - {str(e)}")
 
-        # ATTEMPT 2: Gemini fallback
-        if not success:
-            logging.info("Orchestrator: Attempting Gemini fallback...")
+        # --- 2. FALLBACK GEMINI ---
+        if not success and self.gemini_model:
             try:
-                full_response = await self._handle_gemini_fallback(api_messages)
-                if full_response:
-                    yield full_response
-                    success = True
-                    logging.info("Orchestrator: Gemini fallback succeeded")
+                logger.info("🟡 Tentativo fallback Gemini...")
+                def _gem_call():
+                    prompt = "\n".join([f"{m['role']}: {m['content']}" for m in api_messages])
+                    res = self.gemini_model. generate_content(prompt)
+                    return res.text
+                
+                full_response_str = await asyncio.get_event_loop().run_in_executor(self._executor, _gem_call)
+                logger.info(f"✅ Gemini completato | Lunghezza: {len(full_response_str)} char")
+                success = True
+                
             except Exception as e:
-                logging.error(f"Orchestrator: Gemini fallback error: {e}")
+                logger.error(f"❌ Gemini ERROR: {type(e).__name__} - {str(e)}")
 
-        # ATTEMPT 3: Static fallback if all services fail
-        if not success or not full_response:
-            logging.error("Orchestrator: All AI services failed, using static fallback")
-            fallback = self._get_safe_fallback_response()
-            yield fallback.testo
-            yield fallback
-            return
+        # --- 3. PARSING E VALIDAZIONE ---
+        if success and full_response_str:
+            try:
+                logger.info("🔍 Inizio parsing JSON...")
+                clean_json = re.sub(r"```json\n? |```", "", full_response_str).strip()
+                logger.debug(f"JSON pulito (primi 200 char): {clean_json[:200]}")
+                
+                data = json.loads(clean_json)
+                response_obj = TriageResponse(**data)
+                response_obj = DiagnosisSanitizer. sanitize(response_obj)
 
-        # Validate and parse response
-        try:
-            response_obj = self._validate_and_parse(full_response)
-            
-            # Smart Routing per fase finale
-            if phase == "DISPOSITION":
-                loc = st.session_state.get("collected_data", {}).get("location", "Bologna")
-                structure = self.router.route(loc, response_obj.metadata.urgenza, response_obj.metadata.area)
-                response_obj.testo += f"\n\n📍 **{structure['nome']}**\n{structure.get('note', '')}"
+                # ✅ ROUTING DISPOSITION CON SALVATAGGIO
+                if phase == "DISPOSITION":
+                    loc = st.session_state.get("collected_data", {}).get("LOCATION", "Bologna")
+                    urgenza = response_obj.metadata.urgenza
+                    area = response_obj. metadata.area
+                    
+                    structure = self.router.route(loc, urgenza, area)
+                    
+                    st.session_state.collected_data['DISPOSITION'] = {
+                        'type': structure['tipo'],
+                        'urgency': urgenza,
+                        'facility_name': structure['nome'],
+                        'note': structure.get('note', ''),
+                        'distance':  structure.get('distance_km')
+                    }
+                    
+                    response_obj.testo += f"\n\n📍 **Struttura consigliata:** {structure['nome']}\n{structure. get('note', '')}"
 
-            yield response_obj
-            logging.info("Orchestrator: Response validated and yielded successfully")
-            
-        except Exception as e:
-            logging.error(f"Orchestrator: Validation error: {e}")
-            yield self._get_safe_fallback_response()
+                logger.info(f"✅ Parsing completato | Testo: {len(response_obj.testo)} char")
+                yield response_obj.testo
+                yield response_obj
+                return
+                
+            except json.JSONDecodeError as e:
+                logger.error(f"❌ JSON DECODE ERROR: {e}")
+                logger.error(f"JSON problematico: {full_response_str[: 500]}")
+            except ValidationError as e:
+                logger. error(f"❌ PYDANTIC VALIDATION ERROR: {e}")
+            except Exception as e:
+                logger.error(f"❌ PARSING ERROR: {type(e).__name__} - {str(e)}")
 
-    async def _handle_gemini_fallback(self, messages: List[Dict]) -> str:
-        """Fallback asincrono su Gemini con error handling"""
-        if not self.gemini_model:
-            logging.warning("Gemini fallback called but model not available")
-            return json.dumps({
-                "testo": "Servizio AI temporaneamente non disponibile. Riprova tra qualche istante.",
-                "tipo_domanda": "text",
-                "metadata": {"urgenza": 3, "area": "Generale", "confidence": 0.0, "fallback_used": True}
-            })
-        
-        def _call():
-            prompt = "\n".join([f"{m['role']}: {m['content']}" for m in messages])
-            res = self.gemini_model.generate_content(prompt)
-            return res.text
-        
-        try:
-            result = await asyncio.wait_for(
-                asyncio.get_event_loop().run_in_executor(self._executor, _call),
-                timeout=10.0
-            )
-            return result
-        except asyncio.TimeoutError:
-            logging.error("Gemini timeout after 10s")
-            return json.dumps({
-                "testo": "La richiesta sta impiegando troppo tempo. Riprova.",
-                "tipo_domanda": "text",
-                "metadata": {"urgenza": 3, "area": "Generale", "confidence": 0.0, "fallback_used": True}
-            })
-        except Exception as e:
-            logging.error(f"Gemini error: {e}")
-            return json.dumps({
-                "testo": "Si è verificato un errore. Riprova.",
-                "tipo_domanda": "text",
-                "metadata": {"urgenza": 3, "area": "Generale", "confidence": 0.0, "fallback_used": True}
-            })
-
-    def _validate_and_parse(self, raw_json: str) -> TriageResponse:
-        """Validazione con Pydantic"""
-        try:
-            clean_json = raw_json.replace("```json", "").replace("```", "").strip()
-            data = json.loads(clean_json)
-            response = TriageResponse(**data)
-            return DiagnosisSanitizer. sanitize(response)
-        except (json.JSONDecodeError, ValidationError) as e:
-            logging.error(f"Validazione fallita: {e}")
-            return self._get_safe_fallback_response()
+        # --- 4. FALLBACK DI SICUREZZA ---
+        logger.warning("⚠️ Restituzione fallback generico")
+        fallback = self._get_safe_fallback_response()
+        yield fallback. testo
+        yield fallback
 
     def _get_safe_fallback_response(self) -> TriageResponse:
-        """Risposta di sicurezza"""
         return TriageResponse(
-            testo="Sto analizzando i tuoi sintomi. Descrivimi meglio come ti senti.",
+            testo="Sto analizzando i dati raccolti. Potresti descrivere con più precisione come ti senti in questo momento?",
             tipo_domanda=QuestionType.TEXT,
-            metadata=TriageMetadata(urgenza=3, area="Generale", confidence=0.5, fallback_used=True)
+            metadata=TriageMetadata(urgenza=3, area="Generale", confidence=0.0, fallback_used=True)
         )
 
     def is_available(self) -> bool:
-        """Controlla disponibilità servizi con test rapido"""
-        if not self.groq_client and not self.gemini_model:
-            logging.error("❌ No AI service available")
-            return False
-        
-        # Quick test for Groq if available
-        if self.groq_client:
-            try:
-                async def _test():
-                    response = await asyncio.wait_for(
-                        self.groq_client.chat.completions.create(
-                            model="llama-3.1-8b-instant",
-                            messages=[{"role": "user", "content": "test"}],
-                            max_tokens=5
-                        ),
-                        timeout=5.0
-                    )
-                    return bool(response.choices[0].message.content)
-                
-                # Use asyncio.run() for cleaner async execution
-                try:
-                    result = asyncio.run(_test())
-                    if result:
-                        logging.info("✅ Groq connectivity test passed")
-                        return True
-                except RuntimeError:
-                    # If there's already an event loop, fall back to manual loop creation
-                    loop = asyncio.new_event_loop()
-                    asyncio.set_event_loop(loop)
-                    try:
-                        result = loop.run_until_complete(_test())
-                        if result:
-                            logging.info("✅ Groq connectivity test passed")
-                            return True
-                    finally:
-                        loop.close()
-                    
-            except Exception as e:
-                logging.warning(f"⚠️ Groq test failed: {e}")
-        
-        # If Groq fails, check if Gemini is available as fallback
-        if self.gemini_model:
-            logging.info("✅ Gemini available as fallback")
-            return True
-        
-        return False
+        """Controlla se almeno uno dei servizi è configurato."""
+        return bool(self.groq_client or self.gemini_model)

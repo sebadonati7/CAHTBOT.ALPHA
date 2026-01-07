@@ -1,0 +1,1249 @@
+Analisi Tecnica e Segmentazione: frontend.py
+Questo documento contiene la scomposizione modulare del file frontend.py in blocchi logici "stand-alone". L'obiettivo è isolare le responsabilità per facilitare la manutenzione, i test unitari e l'eventuale migrazione verso un'architettura a micro-moduli.
+
+[BLOCCO 1: Importazione e Configurazione Ambiente]
+Intervallo: Righe 1 - 28Funzione Principale: Configurazione delle dipendenze core e setup della pagina Streamlit.Dettagli Tecnici: Gestisce l'importazione di librerie standard (json, time, uuid, os) e specifiche per l'interfaccia (streamlit). Imposta i metadati della pagina (titolo, icona, layout wide) e il sistema di logging per il monitoraggio dell'applicazione.Dipendenze Note: streamlit, logging, datetime.
+
+[BLOCCO 2: UI Styling e Custom CSS]
+Intervallo: Righe 30 - 80 (circa)Funzione Principale: Definizione dell'aspetto visivo dell'applicazione.Dettagli Tecnici: Inietta codice CSS personalizzato per gestire il design dei bottoni, i banner di emergenza, i box dei messaggi e gli effetti hover. Utilizza st.markdown(unsafe_allow_html=True).Dipendenze Note: Nessuna (puro CSS/HTML).
+
+[BLOCCO 3: Costanti e Integrazione API]
+Intervallo: Righe 82 - 125Funzione Principale: Configurazione dei parametri di sistema e chiavi API.Dettagli Tecnici: Definisce gli endpoint per il geocoding (Nominatim), le chiavi per i modelli LLM (Groq) e i percorsi dei file di log e KB. Include la logica di fallback per le API key mancanti.Dipendenze Note: os, groq.
+
+[BLOCCO 4: Definizione Stato Triage (StateMachine)]
+Intervallo: Righe 127 - 147Funzione Principale: Definizione del flusso logico della conversazione.Dettagli Tecnici: Utilizza un Enum (TriageStep) per mappare ogni fase del processo: Benvenuto, Rilevamento Città, Sintomo Principale, Scala del Dolore, Red Flags, Anamnesi e Disposizione Finale.Dipendenze Note: enum.Enum.
+
+[BLOCCO 5: Utility Geospaziali (GeospatialUtils)]
+Intervallo: Righe 149 - 235Funzione Principale: Gestione della localizzazione e calcolo delle distanze.Dettagli Tecnici: Classe statica che implementa la formula di Haversine per calcolare la distanza tra coordinate GPS e interagisce con le API OpenStreetMap per convertire nomi di città in coordinate.Dipendenze Note: math, requests, urllib3.
+
+[BLOCCO 6: Knowledge Base Manager (KBManager)]
+Intervallo: Righe 237 - 410Funzione Principale: Gestione e interrogazione dei dati sanitari territoriali.Dettagli Tecnici: Carica il file master_kb.json e fornisce metodi per filtrare le strutture sanitarie (Ospedali, CAU, Guardie Mediche) in base alla provincia, città e distanza dal paziente. Gestisce la deduplicazione e la formattazione dei risultati.Dipendenze Note: json, GeospatialUtils.
+
+[BLOCCO 7: Validazione Input (InputValidator)]
+Intervallo: Righe 412 - 530Funzione Principale: Sanificazione e controllo dei dati inseriti dall'utente.Dettagli Tecnici: Include metodi per validare l'età, la scala del dolore (1-10), le risposte SI/NO e la selezione delle Red Flags. Assicura che i dati inviati ai modelli AI siano coerenti.Dipendenze Note: re (Regular Expressions).
+
+[BLOCCO 8: Motore AI e Logica Triage (TriageEngine)]
+Intervallo: Righe 532 - 720Funzione Principale: Interazione con LLM per l'analisi clinica e la generazione delle risposte.Dettagli Tecnici: Contiene la logica di prompt engineering. Genera le domande dinamiche basate sullo stato corrente e analizza l'input dell'utente per determinare se sono presenti sintomi di allarme. Gestisce le chiamate all'API Groq con logica di retry.Dipendenze Note: groq, KBManager, InputValidator.
+
+[BLOCCO 9: Gestione Sessione e Navigazione]
+Intervallo: Righe 722 - 851Funzione Principale: Persistenza dei dati tra i vari refresh di Streamlit.Dettagli Tecnici: Inizializza st.session_state. Gestisce l'avanzamento dei passi (advance_step) e il salvataggio dei log di triage nel file JSONL.Dipendenze Note: st.session_state, uuid, datetime.
+
+[BLOCCO 10: Gestione Componenti Sidebar e Branding]
+Intervallo: Righe 852 - 878Funzione Principale: Rendering della barra laterale e monitoraggio stato API.Dettagli Tecnici: Gestisce l'interfaccia laterale fornendo feedback visivo sulla connessione API (Groq Status). Include il comando di reset della sessione tramite st.button che pulisce il session_state. Definisce inoltre il branding principale e le istruzioni d'uso rapide.Dipendenze Note: st.sidebar, GROQ_API_KEY.
+
+[BLOCCO 11: Rendering Dinamico della Cronologia Chat]
+Intervallo: Righe 879 - 922Funzione Principale: Visualizzazione sequenziale dei messaggi (Chat UI).Dettagli Tecnici: Utilizza un container dedicato (st.container) per iterare sulla lista st.session_state.chat_history. Implementa una logica di switch per renderizzare in modo differente i messaggi 'user' e 'assistant', garantendo la persistenza visiva del dialogo durante il triage.Dipendenze Note: st.session_state.chat_history, st.chat_message.
+
+[BLOCCO 12: Gestore Sondaggi e Form Dinamici (Survey Engine)]
+Intervallo: Righe 923 - 997Funzione Principale: Interfaccia di input guidato per la raccolta dati clinici.Dettagli Tecnici: Questo blocco gestisce l'interazione semantica quando il sistema richiede dati specifici (es. Scala del dolore, Red Flags). Utilizza componenti Streamlit (st.columns, st.button, st.slider) per trasformare input testuali in dati strutturati. Include la logica di validazione immediata tramite InputValidator prima di aggiornare i metadati della sessione.Dipendenze Note: InputValidator, TriageStep, st.session_state.pending_survey.
+
+[BLOCCO 13: Intercettazione Input e Orchestrazione AI]
+Intervallo: Righe 998 - 1030Funzione Principale: Gestione dell'evento di invio messaggio da parte dell'utente.Dettagli Tecnici: Utilizza l'operatore di assegnazione condizionale st.chat_input per catturare l'input testuale. Innesca una serie di azioni sincrone: salvataggio dell'input nella storia, chiamata asincrona simulata al TriageEngine per ottenere la risposta del bot, e aggiornamento dei metadati della sessione necessari per l'analisi clinica.Dipendenze Note: st.chat_input, TriageEngine.process_input, st.session_state.
+
+[BLOCCO 14: Logica di Avanzamento e Sincronizzazione UI]
+Intervallo: Righe 1031 - 1045Funzione Principale: Dispatcher dello stato e trigger del re-rendering.Dettagli Tecnici: Dopo ogni interazione valida, questo blocco invoca advance_step() per valutare se le condizioni di transizione tra i vari TriageStep sono soddisfatte. Esegue il logging del cambio di stato e chiama st.rerun() per forzare Streamlit a rigenerare l'interfaccia, garantendo che i nuovi componenti (come survey o verdetti finali) siano visualizzati immediatamente.Dipendenze Note: advance_step(), st.rerun(), logger.
+
+# Analisi Tecnica e Segmentazione:  frontend.py (CONTINUAZIONE RIGHE 1045-1608)
+
+Questa sezione prosegue l'analisi modulare del file `frontend.py` coprendo **esclusivamente le righe 1045-1608**, mantenendo la stessa densità informativa del documento di riferimento.
+
+---
+
+## [BLOCCO 15: Costanti AUSL Romagna per Smart Routing]
+**Intervallo:** Righe 1045-1067  
+**Funzione Principale:** Definizione dataset geografico e parametri per routing intelligente PS.   
+**Dettagli Tecnici:**  
+- **Set `COMUNI_AUSL_ROMAGNA`:** 70+ comuni territorio AUSL Romagna (lowercase normalizzato).
+  - Copertura province:  Ravenna, Forlì-Cesena, Rimini. 
+  - Include comuni montani (es. "casteldelci", "premilcuore") e costieri (es. "cesenatico", "bellaria-igea marina").
+- **Costante `AUSL_ROMAGNA_PS_WAIT_TIMES_URL`:** Link istituzionale tempi attesa PS real-time.
+- **Soglia `PS_CROWDED_THRESHOLD_MINUTES`:** 120 minuti (trigger alert affollamento).
+- **Utilizzo:** Abilita funzionalità context-aware per comuni AUSL Romagna (link tempi attesa + alternative CAU).
+
+**Dipendenze Note:** Nessuna (struttura dati pura).
+
+---
+
+## [BLOCCO 16: Funzioni Validazione Territorio AUSL Romagna]
+**Intervallo:** Righe 1069-1087  
+**Funzione Principale:** Logic layer per routing geografico intelligente.  
+**Dettagli Tecnici:**  
+
+### **Funzione 1:** `is_ausl_romagna_comune(comune:  str) -> bool`
+- **Pre-processing:**
+  - Normalizza input (lowercase, strip).
+  - Gestione alias "forli" → "forlì" (correzione automatica accento).
+- **Validazione:** Membership check in `COMUNI_AUSL_ROMAGNA`.
+- **Output:** Boolean (True se AUSL Romagna, False altrimenti).
+
+### **Funzione 2:** `should_show_ps_wait_times(comune: str, urgency_level: float) -> bool`
+- **Logica composita:**
+  1. Guard clause:  comune deve essere AUSL Romagna. 
+  2. Threshold: `urgency_level >= 3. 0` (MODERATA o superiore).
+- **Uso:** Trigger condizionale per rendering alert tempi attesa. 
+- **Output:** Boolean (True se mostrare link, False altrimenti).
+
+**Dipendenze Note:** `COMUNI_AUSL_ROMAGNA`, `is_ausl_romagna_comune()`.
+
+---
+
+## [BLOCCO 17: Renderer Alert Tempi Attesa PS con Smart Routing]
+**Intervallo:** Righe 1089-1134  
+**Funzione Principale:** UI component per alert PS context-aware con alternative CAU.  
+**Dettagli Tecnici:**  
+
+### **Funzione:** `render_ps_wait_times_alert(comune: str, urgency_level:  float, has_cau_alternative: bool)`
+
+**Strategia Rendering a 3-tier:**
+
+1. **CRITICA (urgency >= 4.5):**
+   - Colore:  Rosso `#dc2626`.
+   - Icona: 🚨 "PRONTO SOCCORSO - Urgenza Critica".
+   - Messaggio: "Recati **immediatamente** al PS o chiama 118."
+   - CAU alternative: **Nascosto** (`show_cau_alternative = False`).
+
+2. **URGENTE (3.5 <= urgency < 4.5):**
+   - Colore:  Arancio `#f97316`.
+   - Icona: ⚠️ "Pronto Soccorso Raccomandato".
+   - Messaggio: "Si consiglia PS **entro 2 ore**."
+   - CAU alternative: **Mostrato** se `has_cau_alternative = True`.
+
+3. **MODERATA (urgency < 3.5):**
+   - Colore: Giallo `#f59e0b`.
+   - Icona: ℹ️ "Consulta Tempi di Attesa".
+   - Messaggio: "Valuta tempi attesa PS {comune}."
+   - CAU alternative: **Mostrato** se `has_cau_alternative = True`.
+
+**Componenti HTML:**
+- **Card colorata:** Background dinamico, padding 20px, border-radius 12px.
+- **Layout 2-colonne:**
+  - Col1 (60%): Titolo "🕐 Verifica Tempi di Attesa Reali".
+  - Col2 (40%): `st.link_button` a `AUSL_ROMAGNA_PS_WAIT_TIMES_URL` (type="primary").
+- **Info box CAU:** Mostrato condizionalmente con numero verde **800 033 033**.
+
+**Dipendenze Note:** `st.markdown`, `st.columns`, `st.link_button`, `st.info`.
+
+---
+
+## [BLOCCO 18: Enumerazioni Stato Triage (State Machine Core)]
+**Intervallo:** Righe 1136-1151  
+**Funzione Principale:** Definizione formale stati obbligatori del flusso triage.  
+**Dettagli Tecnici:**  
+
+### **Classe `TriageStep(Enum)`**
+**6 stati sequenziali (valore intero 1-6):**
+
+| Step | Value | Descrizione | Validazione Richiesta |
+|------|-------|-------------|----------------------|
+| `LOCATION` | 1 | Comune Emilia-Romagna | `InputValidator.validate_location()` |
+| `CHIEF_COMPLAINT` | 2 | Sintomo principale | Input libero (non null) |
+| `PAIN_SCALE` | 3 | Scala dolore 1-10 | `InputValidator.validate_pain_scale()` |
+| `RED_FLAGS` | 4 | Checklist sintomi gravi | `InputValidator.validate_red_flags()` |
+| `ANAMNESIS` | 5 | Età, farmaci, allergie | `InputValidator.validate_age()` (opzionale) |
+| `DISPOSITION` | 6 | Verdetto finale | Generato automaticamente dal sistema |
+
+**Proprietà Enum:**
+- Ordine rigido: avanzamento solo se step precedente completato.
+- Accesso via `.value` (int) o `.name` (str).
+
+**Dipendenze Note:** `enum.Enum`.
+
+---
+
+## [BLOCCO 19: Sistema Classificazione Emergenze Multi-Livello]
+**Intervallo:** Righe 1153-1205  
+**Funzione Principale:** Enumerazione livelli emergenza + mapping regole azione.  
+**Dettagli Tecnici:**  
+
+### **Classe `EmergencyLevel(Enum)`**
+**5 livelli severity (valore intero 1-5):**
+
+| Livello | Value | Significato | Tempo Risposta |
+|---------|-------|-------------|----------------|
+| `GREEN` | 1 | Non urgente | Follow-up giorni |
+| `YELLOW` | 2 | Differibile | Monitoraggio 24-48h |
+| `ORANGE` | 3 | Urgente | PS entro 2h |
+| `RED` | 4 | Emergenza immediata | 118 ORA |
+| `BLACK` | 5 | Crisi psichiatrica | Hotline 24/7 |
+
+### **Dizionario `EMERGENCY_RULES`**
+**Struttura per ogni livello:**
+```python
+{
+    EmergencyLevel.RED: {
+        "symptoms": List[str],      # Pattern keyword (15-20 varianti)
+        "action":  str,              # Codice azione (es. "IMMEDIATE_118")
+        "message": str,             # Testo alert UI
+        "ui_behavior": str          # Tipo comportamento UI
+    }
+}
+```
+
+**Keyword Mapping (esempi):**
+- **RED:** "dolore toracico intenso", "oppressione torace", "non riesco respirare", "perdita di coscienza", "convulsioni", "emorragia massiva", "paralisi improvvisa". 
+- **ORANGE:** "dolore addominale acuto", "trauma cranico", "febbre alta bambino", "vomito persistente". 
+- **BLACK:** "suicidio", "uccidermi", "togliermi la vita", "autolesionismo", "pensieri suicidari". 
+
+**UI Behaviors:**
+- `overlay_fullscreen_blocking` (RED): Blocca app con chiamata `st.stop()`.
+- `panel_support_numbers` (BLACK): Mostra contatti supporto psicologico.
+- `banner_warning_persistent` (ORANGE): Warning box non bloccante. 
+
+**Dipendenze Note:** `EmergencyLevel`, `typing.List`.
+
+---
+
+## [BLOCCO 20: Motore Valutazione Emergenze (Risk Assessment)]
+**Intervallo:** Righe 1207-1268  
+**Funzione Principale:** Algoritmo multi-criterio per scoring rischio clinico.  
+**Dettagli Tecnici:**  
+
+### **Funzione:** `assess_emergency_level(user_input: str, metadata: Dict) -> Optional[EmergencyLevel]`
+
+**Pipeline 4-priorità (early exit):**
+
+#### **PRIORITÀ 1: BLACK (psichiatrico)**
+- Keyword matching su `EMERGENCY_RULES[EmergencyLevel.BLACK]["symptoms"]`.
+- Match case-insensitive su `text_lower`.
+- **Action:** `logger.warning()` + return `EmergencyLevel.BLACK`.
+- **Rationale:** Precedenza assoluta su emergenze mediche (protocollo WHO).
+
+#### **PRIORITÀ 2: RED (medico critico)**
+- Keyword matching su `EMERGENCY_RULES[EmergencyLevel.RED]["symptoms"]`.
+- **Action:** `logger.error()` + return `EmergencyLevel.RED`.
+
+#### **PRIORITÀ 3: Metadata AI**
+**Regole composite:**
+1. `urgenza == 5 AND confidence >= 0.7` → RED (alta fiducia AI).
+2. `urgenza == 5 OR len(red_flags) >= 2` → RED (urgenza massima o multi-flag).
+3. `urgenza == 4 OR len(red_flags) == 1` → ORANGE (urgente).
+
+#### **PRIORITÀ 4: ORANGE (sintomi urgenti)**
+- Keyword matching su `EMERGENCY_RULES[EmergencyLevel.ORANGE]["symptoms"]`.
+- **Action:** `logger.info()` + return `EmergencyLevel.ORANGE`.
+
+**Output:**
+- `EmergencyLevel` se match trovato.
+- `None` se nessuna emergenza rilevata.
+
+**Logging Strategy:**
+- BLACK/RED: `warning`/`error` level (trigger alert sistema).
+- ORANGE: `info` level (tracking normale).
+- Metadata AI: Log con dettaglio `urgenza`, `red_flags`, `confidence`.
+
+**Dipendenze Note:** `EMERGENCY_RULES`, `EmergencyLevel`, `logger`, `typing.Dict/Optional`.
+
+---
+
+## [BLOCCO 21: Renderer Overlay Emergenze (UI Blocking Layer)]
+**Intervallo:** Righe 1270-1388  
+**Funzione Principale:** UI components per gestione emergenze con comportamenti differenziati.  
+**Dettagli Tecnici:**  
+
+### **Funzione:** `render_emergency_overlay(level: EmergencyLevel)`
+
+**Strategia 3-branch (non arbitraria):**
+
+#### **Branch 1: RED - Overlay Fullscreen BLOCCANTE**
+**Comportamento:**
+- **HTML overlay:** `position: fixed`, `z-index: 9999`, `background: rgba(220, 38, 38, 0.97)`.
+- **Backdrop blur:** `backdrop-filter: blur(10px)` (effetto sfocatura).
+- **Card centrale:** Max-width 600px, padding 50px, box-shadow profonda.
+- **Contenuto:**
+  - Icona 🚨 (font-size 3em).
+  - Titolo "EMERGENZA MEDICA" (colore `#dc2626`).
+  - Messaggio da `EMERGENCY_RULES[RED]["message"]`.
+  - Disclaimer:  "Non può sostituire intervento medico immediato".
+  - **CTA primaria:** Link `<a href='tel:118'>` (style inline, hover transform).
+  - Footer: "Servizio attivo 24/7 - Chiamata gratuita". 
+- **Side Effect:** `st.stop()` → **BLOCCA esecuzione app**. 
+- **Logging:** `logger.critical()` con messaggio "Application stopped".
+
+#### **Branch 2: BLACK - Panel Supporto Psicologico (NON bloccante)**
+**Comportamento:**
+- **Card gradient:** `linear-gradient(135deg, #7c3aed 0%, #5b21b6 100%)`.
+- **Contenuto:**
+  - Titolo "🆘 Non sei solo/a" (font-size 2em).
+  - Messaggio da `EMERGENCY_RULES[BLACK]["message"]`.
+  - **Box contatti (background bianco 95% opacity):**
+    - Telefono Amico Italia: `02 2327 2327` (10-24).
+    - Numero Antiviolenza: `1522` (24/7 + WhatsApp).
+    - Samaritans Onlus: `800 86 00 22` (24/7).
+    - Link chat online: `www.telefonoamico.it`.
+  - Footer: "Puoi continuare conversazione, ma contatta servizi sopra".
+- **Side Effect:** Nessuno (l'app continua).
+- **Logging:** `logger.warning()` con "BLACK emergency panel displayed".
+
+#### **Branch 3: ORANGE - Banner Warning Persistente**
+**Comportamento:**
+- **Component:** `st.warning()` (built-in Streamlit).
+- **Contenuto:**
+  - Messaggio da `EMERGENCY_RULES[ORANGE]["message"]`.
+  - Suggerimento: "Usa sezione 📍 Strutture Sanitarie Vicine".
+- **Side Effect:** Nessuno. 
+- **Logging:** `logger.info()` con "ORANGE warning banner displayed".
+
+**Accessibilità:**
+- RED: Keyboard trap intenzionale (focus su CTA 118).
+- BLACK: Navigazione standard consentita.
+- ORANGE:  Non interrompe flusso. 
+
+**Dipendenze Note:** `st.markdown`, `st.warning`, `st.stop()`, `EMERGENCY_RULES`, `logger`.
+
+---
+
+## [BLOCCO 22: Classi Utility Sicurezza e Parsing JSON]
+**Intervallo:** Righe 1390-1418  
+**Funzione Principale:** Sanificazione input + estrazione JSON da testo LLM.  
+**Dettagli Tecnici:**  
+
+### **Classe `DataSecurity`**
+**Metodo:** `sanitize_input(text: str) -> str` (statico)
+- **Step 1:** Guard clause (return "" se input null).
+- **Step 2:** Regex XSS removal: 
+  ```python
+  re.sub(r'<script.*?>.*?</script>|<.*?>', '', text, flags=re.DOTALL)
+  ```
+  - Rimuove tag `<script>` e tutti i tag HTML.
+- **Step 3:** Truncate a 2000 caratteri (protezione DoS).
+- **Step 4:** Strip whitespace.
+- **Output:** Stringa sanificata safe per rendering.
+
+### **Classe `JSONExtractor`**
+**Metodo:** `extract(text: str) -> Optional[Dict]` (statico)
+- **Strategia 2-step:**
+  1. **Ricerca manuale:** `text.find('{')` + `text.rfind('}')`, parse slice.
+  2. **Fallback regex:** `r'\{(? :[^{}]|(? R))*\}` (pattern ricorsivo).
+     - **Nota:** Pattern `(? R)` **non supportato** da `re` Python → rischio errore.
+     - **Fix suggerito:** Usare `regex` library o parsing iterativo. 
+- **Error handling:** Try-except generico con `logger.error()`.
+- **Output:** `Dict` parsato o `None`.
+
+**Dipendenze Note:** `re`, `json`, `logging`, `typing.Optional`.
+
+---
+
+## [BLOCCO 23: Dataset Comuni Emilia-Romagna per Validazione]
+**Intervallo:** Righe 1420-1426  
+**Funzione Principale:** Whitelist geografica per validazione LOCATION step.  
+**Dettagli Tecnici:**  
+- **Set `COMUNI_ER_VALIDI`:** 25 comuni (lowercase).
+- **Copertura province:** Bologna, Modena, Reggio Emilia, Parma, Ferrara, Ravenna, Rimini, Forlì-Cesena, Piacenza. 
+- **Utilizzo:** `InputValidator.validate_location()` per match esatto/fuzzy.
+- **Limitazione nota:** Mancano comuni <10k abitanti (es. "vergato", "loiano").
+- **Alternativa suggerita:** Integrazione API ISTAT comuni (dataset completo 328 comuni ER).
+
+**Dipendenze Note:** Nessuna (set statico).
+
+---
+
+## [BLOCCO 24: Sistema Validazione Input Multi-Fase (InputValidator)]
+**Intervallo:** Righe 1428-1608  
+**Funzione Principale:** Classe statica per validazione semantica input utente per ogni step.  
+**Dettagli Tecnici:**  
+
+### **Attributo di Classe:**
+**`WORD_TO_NUM`:** Dizionario `str -> int` (0-100)
+- Esempi: "venticinque" → 25, "settantacinque" → 75.
+- **Utilizzo:** Parsing età e scala dolore in linguaggio naturale.
+
+### **Metodo 1:** `validate_location(user_input: str) -> Tuple[bool, Optional[str]]`
+
+**Pipeline validazione:**
+1. **Pre-processing:**
+   - Lowercase + strip. 
+   - Regex rimozione articoli:  `r'\b(il|lo|la|i|gli|le|un|uno|una|di|a)\b'`.
+2. **Match esatto:** Check in `COMUNI_ER_VALIDI`.
+3. **Match parziale (len >= 4):**
+   - Substring bidirezionale (input in comune, comune in input).
+4. **Fuzzy matching (len >= 5, diff lunghezze <= 2):**
+   - Conta errori char-by-char con `zip()`.
+   - Tolleranza:  max 2 errori (es.  "bologn" → "bologna").
+5. **Normalizzazione output:** `.title()` (es. "Bologna").
+
+**Output:** `(True, "Comune Normalizzato")` o `(False, None)`.
+
+### **Metodo 2:** `validate_age(user_input:  str) -> Tuple[bool, Optional[int]]`
+
+**Priorità estrazione:**
+1. **Numeri diretti:** Regex `r'\b(\d{1,3})\b'`, range 0-120.
+   - Skip numeri <10 se esistono altri match (evita date es. "5 dicembre").
+2. **Numeri scritti:** Lookup in `WORD_TO_NUM`, range 0-120.
+3. **Keyword speciali:**
+   - "neonato", "appena nato" → 0.
+   - "bambino", "bambina" → 5.
+   - "adolescente", "teenager" → 15.
+   - "anziano", "vecchio" → 75. 
+
+**Output:** `(True, età_int)` o `(False, None)`.
+
+### **Metodo 3:** `validate_pain_scale(user_input: str) -> Tuple[bool, Optional[int]]`
+
+**Priorità mappatura:**
+1. **Numeri diretti:** Regex 1-10.
+2. **Qualificatori testuali (13 keyword):**
+   - "nessun" → 1 (special case:  0 → 1 per coerenza scala).
+   - "poco", "leggero" → 2-3.
+   - "moderato", "medio" → 5.
+   - "forte", "acuto", "molto" → 7-8.
+   - "insopportabile", "estremo", "lancinante" → 10.
+3. **Numeri scritti:** Lookup `WORD_TO_NUM` (1-10).
+
+**Output:** `(True, valore_1_10)` o `(False, None)`.
+
+### **Metodo 4:** `validate_red_flags(user_input: str) -> Tuple[bool, List[str]]`
+
+**Dizionario `flag_patterns` (8 categorie):**
+
+| Flag | Pattern Regex | Count |
+|------|--------------|-------|
+| `dolore_toracico` | `r"dolore. {0,10}petto"`, `r"oppressione.{0,10}petto"` | 5 |
+| `dispnea` | `r"difficolt[aà]. {0,15}respir"`, `r"soffoco"` | 6 |
+| `alterazione_coscienza` | `r"confus[oa]"`, `r"svenimento"` | 5 |
+| `emorragia` | `r"sangue.{0,10}abbondante"`, `r"emorragia"` | 4 |
+| `trauma_cranico` | `r"battuto.{0,10}testa"`, `r"caduta. {0,10}testa"` | 5 |
+| `dolore_addominale_acuto` | `r"dolore.{0,10}addom. {0,10}acuto"` | 4 |
+| `paralisi` | `r"non.{0,10}muovo"`, `r"paralizzat[oa]"` | 5 |
+| `convulsioni` | `r"convulsion"`, `r"crisi.{0,10}epilett"` | 5 |
+
+**Logica rilevamento:**
+- Loop su ogni categoria.
+- Per ogni pattern: `re.search()` su `text_lower`.
+- Se match → append categoria + `break` (evita duplicati).
+
+**Output:** `(True, lista_red_flags)` - **sempre True**, lista può essere vuota.
+
+**Dipendenze Note:** `re`, `typing. Tuple/List/Optional`, `COMUNI_ER_VALIDI`, `WORD_TO_NUM`.
+
+BLOCCO 25: Inizializzazione Session State con State Machine - PARTE DOCUMENTAZIONE]
+Intervallo: Righe 1608-1625
+Funzione Principale: Docstring della funzione init_session().
+Dettagli Tecnici:
+
+Python
+def init_session():
+    """
+    Inizializza stato sessione con supporto State Machine. 
+    
+    CAMPI NUOVI (PARTE 1):
+    - current_step: TriageStep enum (step corrente)
+    - collected_data:  Dict con dati validati per ogni step
+    - step_completed:  Dict[TriageStep, bool] (tracking completamenti)
+    - step_timestamps: Dict con timing per analytics
+    - session_start:  Timestamp inizio sessione
+    - ai_retry_count: Dict per tracking retry AI per fase
+    """
+Contenuto: Documentazione tecnica che descrive i nuovi campi aggiunti al session_state per supportare la State Machine del triage. Non esegue codice, serve come reference per sviluppatori.
+
+Dipendenze Note: Nessuna (solo testo).
+
+[BLOCCO 26: Inizializzazione Session State - IMPLEMENTAZIONE]
+Intervallo: Righe 1626-1656
+Funzione Principale: Creazione e popolamento dello stato globale dell'applicazione.
+Dettagli Tecnici:
+
+Guard Clause:
+Python
+if "session_id" not in st.session_state:
+Esegue inizializzazione solo la prima volta che l'utente accede all'app.
+
+Campi Inizializzati (15 campi totali):
+1. Identificazione Sessione
+Python
+st.session_state.session_id = str(uuid.uuid4())
+UUID v4 (formato: 550e8400-e29b-41d4-a716-446655440000)
+Utilizzato per tracking analytics e log
+2. Cronologia Conversazione
+Python
+st.session_state.messages = []
+Lista di dizionari {"role": "user"/"assistant", "content": str}
+3. State Machine (NUOVO)
+Python
+st.session_state.current_step = TriageStep. LOCATION
+st.session_state.collected_data = {}  # {step_name: validated_value}
+st.session_state.step_completed = {step: False for step in TriageStep}
+current_step: Enum che traccia posizione nel flusso
+collected_data: Dati validati da InputValidator
+step_completed: Dict per tracking progressione
+4. Tracking Temporale (NUOVO)
+Python
+st.session_state.step_timestamps = {}  # {step_name: {'start': dt, 'end': dt}}
+st.session_state.session_start = datetime.now()
+Utilizzato da save_structured_log() per analytics durata step
+5. Campi Legacy (Compatibilità)
+Python
+st.session_state.current_phase_idx = 0
+st.session_state.pending_survey = None
+st.session_state.critical_alert = False
+st.session_state.gdpr_consent = False
+st. session_state.specialization = "Generale"
+st.session_state.metadata_history = []
+st.session_state.backend = BackendClient()
+6. Campi Emergenze (NUOVO)
+Python
+st.session_state.ai_retry_count = {}
+st.session_state.emergency_level = None
+Logging: Info-level con session_id al termine.
+
+Dipendenze Note: uuid. uuid4, datetime.now, TriageStep, BackendClient.
+
+[BLOCCO 27: Validazione Completamento Step]
+Intervallo: Righe 1658-1677
+Funzione Principale: Check pre-condizione per avanzamento step.
+Dettagli Tecnici:
+
+Funzione: can_proceed_to_next_step() -> bool
+Logica:
+
+Python
+current_step = st.session_state.current_step
+step_name = current_step.name
+
+# Check se esiste dato validato per questo step
+has_data = step_name in st.session_state.collected_data
+
+# Step DISPOSITION è speciale:  si completa automaticamente
+if current_step == TriageStep. DISPOSITION: 
+    return True
+
+logger.debug(f"can_proceed_to_next_step: step={step_name}, has_data={has_data}")
+return has_data
+Caso Speciale: DISPOSITION ritorna sempre True perché non richiede input utente (è generato dal sistema).
+
+Output: bool (True = può avanzare, False = blocca).
+
+Dipendenze Note: st.session_state, TriageStep, logger.
+
+[BLOCCO 28: Avanzamento Step con Validazione e Timestamp]
+Intervallo: Righe 1680-1723
+Funzione Principale: Transizione controllata tra step del triage.
+Dettagli Tecnici:
+
+Funzione: advance_step() -> bool
+Step 1: Pre-condizione (Guard Clause)
+Python
+if not can_proceed_to_next_step():
+    st.warning("⚠️ Completa le informazioni richieste prima di procedere")
+    logger.warning(f"advance_step blocked: step {st.session_state.current_step.name} not completed")
+    return False
+Step 2: Salvataggio Timestamp
+Python
+current_step = st.session_state.current_step
+current_value = current_step.value
+
+st.session_state.step_timestamps[current_step. name] = {
+    'start': st.session_state.get(f'{current_step.name}_start_time', datetime.now()),
+    'end': datetime.now()
+}
+Nota: start_time viene impostato quando si entra nello step (logica NON presente in questo blocco, presumibilmente in main()).
+
+Step 3: Marcatura Completamento
+Python
+st.session_state.step_completed[current_step] = True
+Step 4: Calcolo Next Step
+Python
+max_value = max(step. value for step in TriageStep)
+
+if current_value < max_value:
+    next_step = TriageStep(current_value + 1)
+    st.session_state.current_step = next_step
+    
+    # Inizia timer nuovo step
+    st.session_state[f'{next_step.name}_start_time'] = datetime.now()
+    
+    # Feedback visivo
+    st.toast(f"✅ Completato:  {current_step.name}", icon="✅")
+    
+    logger.info(f"Advanced from {current_step.name} (value={current_value}) to {next_step.name} (value={next_step.value})")
+    return True
+else:
+    logger.info(f"Triage completed: all steps done")
+    return True
+Bug Potenziale: Se current_value == max_value, ritorna True ma NON avanza → logica per gestire step finale deve essere altrove.
+
+Dipendenze Note: can_proceed_to_next_step(), st.warning, st.toast, datetime.now, logger.
+
+[BLOCCO 29: Logging Strutturato JSON per Backend Analytics]
+Intervallo: Righe 1726-1800
+Funzione Principale: Serializzazione dati sessione in formato JSONL con schema v2.0.
+Dettagli Tecnici:
+
+Funzione: save_structured_log()
+Guard Clause GDPR:
+Python
+if not st.session_state.get("gdpr_consent", False):
+    logger.info("Skipping log save: GDPR consent not given")
+    return
+Calcolo Durata Totale:
+Python
+session_end = datetime.now()
+session_start = st.session_state.session_start
+total_duration = (session_end - session_start).total_seconds()
+Costruzione steps_data (Array con timing per step):
+Python
+steps_data = []
+for step in TriageStep:
+    step_name = step.name
+    if step_name in st.session_state.step_timestamps:
+        ts_data = st.session_state. step_timestamps[step_name]
+        duration = (ts_data['end'] - ts_data['start']).total_seconds()
+        steps_data. append({
+            "step_name": step_name,
+            "duration_seconds": round(duration, 2),
+            "data_collected": st.session_state.collected_data.get(step_name),
+            "timestamp_start": ts_data['start']. isoformat(),
+            "timestamp_end": ts_data['end'].isoformat()
+        })
+Clinical Summary:
+Python
+clinical_summary = {
+    "chief_complaint": st.session_state.collected_data.get('CHIEF_COMPLAINT'),
+    "pain_severity": st.session_state.collected_data.get('PAIN_SCALE'),
+    "red_flags": st.session_state. collected_data.get('RED_FLAGS', []),
+    "age": st.session_state.collected_data.get('age'),
+    "location": st.session_state.collected_data.get('LOCATION')
+}
+Outcome:
+Python
+disposition_data = st.session_state.collected_data.get('DISPOSITION', {})
+outcome = {
+    "disposition": disposition_data.get('type', 'Non Completato'),
+    "urgency_level": disposition_data.get('urgency', 0),
+    "facility_recommended": disposition_data.get('facility_name'),
+    "distance_km": disposition_data.get('distance'),
+    "eta_minutes": disposition_data.get('eta')
+}
+Metadata:
+Python
+metadata = {
+    "specialization": st.session_state. specialization,
+    "emergency_triggered": st.session_state.emergency_level is not None,
+    "emergency_level": st.session_state.emergency_level. name if st.session_state. emergency_level else None,
+    "ai_fallback_used": any("fallback" in str(m) for m in st.session_state.metadata_history),
+    "total_messages": len(st.session_state.messages)
+}
+Schema Finale:
+Python
+log_entry = {
+    "session_id": st.session_state.session_id,
+    "timestamp_start": session_start.isoformat(),
+    "timestamp_end": session_end.isoformat(),
+    "total_duration_seconds": round(total_duration, 2),
+    "steps":  steps_data,
+    "clinical_summary": clinical_summary,
+    "outcome": outcome,
+    "metadata": metadata,
+    "version": "2.0"
+}
+Scrittura File (JSONL = 1 JSON per riga):
+Python
+with open(LOG_FILE, 'a', encoding='utf-8') as f:
+    f.write(json.dumps(log_entry, ensure_ascii=False) + '\n')
+Error Handling: try-except con exc_info=True per stack trace completo.
+
+Dipendenze Note: datetime, json, LOG_FILE, TriageStep, logger.
+
+[BLOCCO 30: Utility Mappatura Step → Nomi UI]
+Intervallo: Righe 1803-1820
+Funzione Principale: Conversione Enum → label italiano human-readable.
+Dettagli Tecnici:
+
+Funzione: get_step_display_name(step:  TriageStep) -> str
+Dizionario Mappatura:
+
+Python
+names = {
+    TriageStep.LOCATION: "Localizzazione Geografica",
+    TriageStep.CHIEF_COMPLAINT: "Sintomo Principale",
+    TriageStep.PAIN_SCALE: "Valutazione Intensità",
+    TriageStep.RED_FLAGS: "Screening Emergenze",
+    TriageStep.ANAMNESIS: "Anamnesi Clinica",
+    TriageStep.DISPOSITION: "Verdetto e Raccomandazioni"
+}
+return names.get(step, step.name)
+Fallback: Se step non presente nel dizionario, ritorna step.name (es. "LOCATION").
+
+Uso: Chiamato da render_header() per mostrare titolo step corrente.
+
+Dipendenze Note: TriageStep.
+
+[BLOCCO 31: Progress Bar Visuale Dettagliata]
+Intervallo: Righe 1823-1880
+Funzione Principale: Rendering barra progresso con card per ogni step.
+Dettagli Tecnici:
+
+Funzione: render_progress_bar()
+Dati UI per Step:
+Python
+step_ui_data = {
+    TriageStep.LOCATION: {"emoji": "📍", "label":  "Posizione", "description": "Comune di riferimento"},
+    TriageStep.CHIEF_COMPLAINT: {"emoji": "🩺", "label": "Sintomi", "description": "Disturbo principale"},
+    TriageStep. PAIN_SCALE: {"emoji": "📊", "label": "Intensità", "description": "Scala dolore"},
+    TriageStep.RED_FLAGS: {"emoji":  "🚨", "label":  "Urgenza", "description": "Sintomi gravi"},
+    TriageStep.ANAMNESIS: {"emoji": "📋", "label": "Anamnesi", "description": "Dati clinici"},
+    TriageStep.DISPOSITION: {"emoji": "🏥", "label": "Verdetto", "description": "Raccomandazione"}
+}
+Calcolo Progresso:
+Python
+total_steps = len(TriageStep)
+completed_count = sum(1 for status in st.session_state.step_completed.values() if status)
+progress_percentage = completed_count / total_steps
+
+st.progress(progress_percentage, text=f"Progresso Triage: {completed_count}/{total_steps} step completati")
+Rendering Card (6 colonne):
+Python
+cols = st.columns(total_steps)
+
+for i, step in enumerate(TriageStep):
+    ui_data = step_ui_data[step]
+    is_current = (step == st.session_state.current_step)
+    is_completed = st.session_state.step_completed. get(step, False)
+    
+    if is_completed:
+        status_emoji = "✅"
+        status_color = "#10b981"  # Verde
+        status_text = "Completato"
+    elif is_current:
+        status_emoji = "▶️"
+        status_color = "#3b82f6"  # Blu
+        status_text = "In corso"
+    else:
+        status_emoji = "⏸️"
+        status_color = "#9ca3af"  # Grigio
+        status_text = "Da fare"
+    
+    with cols[i]:
+        st. markdown(f"""
+        <div style='text-align: center; padding: 10px; border-radius: 8px;
+                    background:  {"#f0fdf4" if is_completed else "#f9fafb"};
+                    border: 2px solid {status_color if is_current else "transparent"};'>
+            <div style='font-size:  2em; margin-bottom: 5px;' role='img' aria-label='{ui_data["description"]}'>
+                {ui_data['emoji']}
+            </div>
+            <div style='font-size: 1.2em; margin-bottom: 3px;'>{status_emoji}</div>
+            <div style='font-size: 0.75em; font-weight: 600; color: {status_color};'>{ui_data['label']}</div>
+            <div style='font-size: 0.65em; color: #6b7280; margin-top: 3px;'>{status_text}</div>
+        </div>
+        """, unsafe_allow_html=True)
+Accessibilità: Attributo role='img' e aria-label per screen reader.
+
+Dipendenze Note: st.progress, st.columns, st.markdown, TriageStep, logger.
+
+[BLOCCO 32: Badge Urgenza Real-Time con Trend]
+Intervallo: Righe 1883-1935
+Funzione Principale: Visualizzazione livello urgenza aggregato con colore dinamico.
+Dettagli Tecnici:
+
+Funzione: render_urgency_badge()
+Calcolo Media Mobile (ultimi 3 valori):
+Python
+urgency_values = [
+    m.get('urgenza', 3)
+    for m in st.session_state.metadata_history
+    if isinstance(m, dict) and 'urgenza' in m
+]
+
+if not urgency_values:
+    avg_urgency = 3. 0
+    has_data = False
+else:
+    recent_values = urgency_values[-3:]
+    avg_urgency = sum(recent_values) / len(recent_values)
+    has_data = True
+Calcolo Trend (confronto ultimi 2 valori):
+Python
+trend_emoji = ""
+if len(urgency_values) >= 2:
+    last_value = urgency_values[-1]
+    previous_value = urgency_values[-2]
+    if last_value > previous_value: 
+        trend_emoji = "↗️"  # Peggioramento
+    elif last_value < previous_value:
+        trend_emoji = "↘️"  # Miglioramento
+    else:
+        trend_emoji = "➡️"  # Stabile
+Mappatura Colori e Label:
+Python
+if avg_urgency <= 2.0:
+    bg_color, text_color, border_color = "#10b981", "#ffffff", "#059669"
+    label, emoji, advice = "BASSA", "😊", "Situazione gestibile"
+elif avg_urgency <= 3.0:
+    bg_color, text_color, border_color = "#f59e0b", "#ffffff", "#d97706"
+    label, emoji, advice = "MODERATA", "😐", "Monitorare sintomi"
+elif avg_urgency <= 4.0:
+    bg_color, text_color, border_color = "#f97316", "#ffffff", "#ea580c"
+    label, emoji, advice = "ALTA", "😟", "Valutazione medica raccomandata"
+else:
+    bg_color, text_color, border_color = "#dc2626", "#ffffff", "#b91c1c"
+    label, emoji, advice = "CRITICA", "😰", "Intervento urgente necessario"
+HTML Card con Gradient:
+HTML
+<div style='background: linear-gradient(135deg, {bg_color} 0%, {border_color} 100%);
+            color: {text_color}; padding: 15px 25px; border-radius: 12px;
+            text-align: center; margin: 15px 0; box-shadow: 0 4px 12px rgba(0,0,0,0.15);'
+     role='status' aria-live='polite' aria-label='Livello urgenza:  {label}'>
+    <div style='font-size: 2em; margin-bottom: 5px;'>{emoji} {trend_emoji}</div>
+    <div style='font-size: 1.3em; font-weight: 700;'>URGENZA:  {label}</div>
+    <div style='font-size: 0.95em; margin-top: 8px;'>Livello {avg_urgency:.1f}/5. 0</div>
+    <div style='font-size: 0.85em; margin-top: 5px; font-style: italic;'>{advice}</div>
+    {f"<div style='font-size: 0.75em; margin-top: 8px; opacity: 0.8;'>Basato su {len(urgency_values)} valutazioni</div>" if has_data else ""}
+</div>
+Accessibilità: aria-live='polite' notifica screen reader senza interrompere.
+
+Dipendenze Note: st.markdown, st.session_state.metadata_history, logger
+[BLOCCO 33: Text-to-Speech con Web Speech API]
+Intervallo: Righe 1935-1996
+Funzione Principale: Implementazione Text-to-Speech (TTS) accessibile per lettura vocale messaggi.
+Dettagli Tecnici:
+
+Funzione text_to_speech_button(text: str, key: str, auto_play: bool = False):
+Preprocessing Testo:
+
+Python
+clean_text = text.replace('`', '').replace("'", "\\'").replace('"', '\\"')
+if len(clean_text) > 500:
+    clean_text = clean_text[:497] + "..."
+    logger.warning(f"TTS text truncated for key={key}")
+Rimozione backticks per evitare conflitti con template literals JavaScript
+Escape apici singoli/doppi per sicurezza injection
+Troncamento a 500 caratteri per limite vocale (con log warning)
+Generazione Componente HTML/JavaScript:
+
+Bottone Trigger: ID univoco tts-btn-{key} per multi-istanza
+Span Status: Elemento tts-status-{key} per feedback visivo stati
+Funzione JavaScript speakText_{key}():
+Check Supporto Browser: if (!('speechSynthesis' in window)) → disabilita e avvisa
+Cancellazione Precedente: window.speechSynthesis.cancel() previene overlap
+Creazione Utterance:
+JavaScript
+const utterance = new SpeechSynthesisUtterance(text);
+utterance.lang = 'it-IT';
+utterance.rate = 0.9;  // Velocità 90% per intelligibilità
+Lifecycle Callbacks:
+onstart: Cambia icona bottone a "⏹️ Stop", abilita cancellazione immediata
+onend: Ripristina stato iniziale, mostra checkmark verde 3 secondi
+Invocazione: window.speechSynthesis.speak(utterance)
+Auto-Play Condizionale:
+
+JavaScript
+{'speakText_' + key + '();' if auto_play else ''}
+Se parametro auto_play=True, script auto-esegue al render
+Styling CSS Inline:
+
+Bottone blu (#3b82f6), padding 8px 16px, border-radius 8px
+Cursor pointer per affordance
+Font-size 0.9em per compattezza
+Rendering: st.markdown(tts_html, unsafe_allow_html=True)
+
+Accessibilità: Attributo aria-label='Leggi testo ad alta voce'
+
+Logging: Debug log con key e flag auto_play
+
+Dipendenze Note: Web Speech API (browser-native, no librerie esterne), st.markdown, logger
+
+[BLOCCO 34: Schermata Riepilogo Finale Triage - Parte 1]
+Intervallo: Righe 1998-2071
+Funzione Principale: Rendering pagina conclusiva con recap dati e raccomandazione clinica.
+Dettagli Tecnici:
+
+Funzione render_disposition_summary():
+SEZIONE 1 - Header e Visualizzazione Dati (righe 1998-2030):
+
+Heading: st.markdown("## 📋 Riepilogo Triage e Raccomandazione")
+Estrazione Dati: collected = st.session_state.collected_data
+Calcolo Media Urgenza:
+Python
+urgency_values = [m.get('urgenza', 3) for m in st.session_state.metadata_history if 'urgenza' in m]
+avg_urgency = sum(urgency_values) / len(urgency_values) if urgency_values else 3. 0
+Rendering Dati Raccolti:
+Layout st.columns(2) per split orizzontale
+Colonna 1:
+📍 Localizzazione: collected. get('LOCATION', 'Non specificata')
+🩺 Sintomo: collected.get('CHIEF_COMPLAINT', 'Non specificato')
+📊 Dolore: collected.get('PAIN_SCALE', 'N/D')/10
+Colonna 2:
+👤 Età: collected.get('age', 'Non specificata') + " anni"
+🚨 Red Flags: Join lista collected.get('RED_FLAGS', []) con ", " o "Nessuno"
+⚡ Urgenza: avg_urgency:. 1f + "/5. 0"
+SEZIONE 2 - Logica Raccomandazione (righe 2032-2071):
+
+Decision Tree Multi-Tier:
+Python
+if avg_urgency >= 4.5:
+    rec_type, rec_urgency, rec_color = 'Pronto Soccorso', 'IMMEDIATA', '#dc2626'
+    rec_msg = 'Recati **immediatamente** al PS o chiama 118.'
+    facility_type = 'pronto_soccorso'
+elif avg_urgency >= 3.5:
+    rec_type, rec_urgency, rec_color = 'Pronto Soccorso', 'URGENTE', '#f97316'
+    rec_msg = 'Si consiglia PS **entro 2 ore**.'
+    facility_type = 'pronto_soccorso'
+elif avg_urgency >= 2.5:
+    rec_type, rec_urgency, rec_color = 'CAU', 'MODERATA', '#f59e0b'
+    rec_msg = 'Valutazione presso **CAU** o Guardia Medica.'
+    facility_type = 'cau'
+else:
+    rec_type, rec_urgency, rec_color = 'Medico di Base', 'BASSA', '#10b981'
+    rec_msg = 'Contatta il **Medico di Base** nei prossimi giorni.'
+    facility_type = None
+Rendering Card Raccomandazione:
+
+Python
+st.markdown(f"""
+<div style='background:  {rec_color}; color: white; padding: 25px; border-radius: 15px;
+            margin: 20px 0; text-align: center; box-shadow: 0 8px 20px rgba(0,0,0,0.15);'>
+    <h3 style='margin: 10px 0;'>{rec_type}</h3>
+    <p style='font-size: 1.1em;'>Urgenza: <strong>{rec_urgency}</strong></p>
+    <p style='font-size: 1em;'>{rec_msg}</p>
+</div>
+""", unsafe_allow_html=True)
+Salvataggio Metadata DISPOSITION:
+
+Python
+st.session_state.collected_data['DISPOSITION'] = {
+    'type': rec_type, 
+    'urgency': avg_urgency, 
+    'facility_name': None, 
+    'distance': None, 
+    'eta': None
+}
+Dipendenze Note: st.markdown, st.columns, st.session_state
+
+[BLOCCO 35: Geolocalizzazione Struttura Più Vicina]
+Intervallo: Righe 2073-2155
+Funzione Principale: Query e rendering struttura sanitaria più vicina con indicazioni.
+Dettagli Tecnici:
+
+Condizione Attivazione: if facility_type: (solo se raccomandazione prevede struttura fisica)
+
+Step Operativi:
+
+1. Estrazione Comune (righe 2073-2075):
+
+Python
+st.markdown("### 📍 Struttura Più Vicina")
+comune = collected.get('LOCATION')
+2. Geocoding (righe 2076-2078):
+
+Python
+if comune:
+    coords = get_comune_coordinates(comune)
+3. Query Strutture (righe 2079-2084):
+
+Python
+if coords:
+    with st.spinner("🔍 Ricerca struttura..."):
+        nearest = find_nearest_facilities(coords['lat'], coords['lon'], facility_type, 1)
+max_results=1: Solo più vicina
+Spinner per feedback UX durante query
+4. Calcolo ETA e Rendering (righe 2086-2117):
+
+Python
+if nearest:
+    facility = nearest[0]
+    area_type = get_area_type_from_comune(comune)
+    eta = estimate_eta(facility['distance_km'], area_type)
+Update Metadata DISPOSITION:
+
+Python
+st.session_state.collected_data['DISPOSITION']. update({
+    'facility_name': facility. get('nome'),
+    'distance': facility['distance_km'],
+    'eta': eta['duration_minutes']
+})
+Rendering Card Struttura:
+
+Success message con nome in grassetto
+Layout st.columns(3) per metriche:
+Metric 1: Distanza (km) via st.metric("Distanza", f"{facility['distance_km']} km")
+Metric 2: Tempo Stimato (min) via st.metric("Tempo Stimato", f"~{eta['duration_minutes']} min")
+Metric 3: Tipo Area (urban/suburban/rural) via st.metric("Tipo Area", area_type. title())
+Markdown indirizzo: **📫 Indirizzo:** {facility. get('indirizzo', 'N/D')}
+Markdown telefono: **📞 Telefono:** {facility.get('telefono', 'N/D')}
+Link Google Maps (righe 2113-2117):
+
+Python
+f_lat = facility. get('latitudine') or facility.get('lat')
+f_lon = facility.get('longitudine') or facility.get('lon')
+if f_lat and f_lon: 
+    maps_url = f"https://www.google.com/maps/dir/?api=1&destination={f_lat},{f_lon}"
+    st.link_button("🗺️ Indicazioni Stradali", maps_url, use_container_width=True)
+Dipendenze Note: get_comune_coordinates, find_nearest_facilities, get_area_type_from_comune, estimate_eta, st.spinner, st.metric, st.link_button
+
+[BLOCCO 36: Footer Azioni Post-Triage]
+Intervallo: Righe 2157-2188
+Funzione Principale: Gestione azioni conclusive sessione (reset/salvataggio).
+Dettagli Tecnici:
+
+Divisore Visivo: st.divider() (riga 2157)
+
+Heading Sezione: st.markdown("### 🎯 Prossimi Passi") (riga 2158)
+
+Layout Bottoni: c1, c2 = st.columns(2) (riga 2159)
+
+Bottone 1 - Nuovo Triage (righe 2161-2171):
+
+Python
+with c1:
+    if st.button("🔄 Nuovo Triage", type="primary", use_container_width=True):
+        for key in list(st.session_state.keys()):
+            if key not in ['gdpr_consent', 'high_contrast', 'font_size', 'auto_speech']: 
+                del st.session_state[key]
+        logger.info("New triage started from disposition")
+        st.rerun()
+Type "primary" per enfasi visiva (blu Streamlit)
+Logica Pulizia Selettiva: Preserva preferenze accessibilità (high_contrast, font_size, auto_speech) + consenso GDPR
+Log info per tracking reset
+st.rerun() forza refresh completo UI
+Bottone 2 - Salva e Esci (righe 2173-2176):
+
+Python
+with c2:
+    if st.button("💾 Salva e Esci", use_container_width=True):
+        save_structured_log()
+        st.success("✅ Dati salvati.  Puoi chiudere la finestra.")
+Chiamata save_structured_log() per persistenza JSONL
+Success message non bloccante
+Disclaimer Finale (righe 2178-2179):
+
+Python
+st.info("ℹ️ **Nota:** Questa valutazione non sostituisce il parere medico. In caso di dubbi, contatta il 118.")
+Logging Finale (riga 2181):
+
+Python
+logger.info(f"Disposition summary rendered: type={rec_type}, urgency={avg_urgency:.2f}")
+Dipendenze Note: st.button, st.rerun, st.success, st.info, save_structured_log, logger
+
+[BLOCCO 37: Aggiornamento Backend Metadata]
+Intervallo: Righe 2190-2203
+Funzione Principale: Sincronizzazione metadata AI con backend + logica specializzazione dinamica.
+Dettagli Tecnici:
+
+Funzione update_backend_metadata(metadata: Dict):
+Operazione 1 - Append History (riga 2191):
+
+Python
+st.session_state.metadata_history. append(metadata)
+Operazione 2 - Sync Backend (riga 2192):
+
+Python
+st.session_state.backend. sync({"event": "metadata_update", "metadata": metadata})
+Chiamata metodo sync() di BackendClient con payload strutturato
+Backend può usare per routing real-time specialisti
+Operazione 3 - Specializzazione Dinamica (righe 2194-2203):
+
+Python
+areas = [m.get("area") for m in st.session_state.metadata_history if m.get("area")]
+
+if areas. count("Trauma") >= 2:
+    st.session_state.specialization = "Ortopedia"
+elif areas.count("Psichiatria") >= 2:
+    st.session_state. specialization = "Psichiatrica"
+Pattern Matching: Count occorrenze area clinica in history
+Threshold: 2+ occorrenze triggera cambio specializzazione
+Aree Mappate: "Trauma" → "Ortopedia", "Psichiatria" → "Psichiatrica"
+Estendibile: Logica facilmente espandibile per altre aree (Cardiologia, Pediatria, etc.)
+Side Effects: Modifica diretta st.session_state.specialization (visibile in sidebar)
+
+Dipendenze Note: st.session_state, BackendClient
+
+[BLOCCO 38: Funzione Main - Entry Point Applicazione]
+Intervallo: Righe 2205-2418
+Funzione Principale: Orchestrazione ciclo di vita completo applicazione Streamlit.
+Dettagli Tecnici:
+
+Funzione main():
+STEP 1 - Inizializzazione (righe 2206-2208):
+
+Python
+init_session()
+orchestrator = ModelOrchestrator()
+pharmacy_db = PharmacyService()
+Chiamata init_session() per setup stato globale
+Istanza orchestratore AI (connessione Groq/Gemini)
+Istanza servizio farmacie (caricamento dati territoriali)
+STEP 2 - Gate GDPR (righe 2210-2217):
+
+Python
+if not st.session_state.gdpr_consent:
+    st.markdown("### 📋 Benvenuto in Health Navigator")
+    render_disclaimer()
+    if st.button("✅ Accetto e Inizio Triage", type="primary", use_container_width=True):
+        st.session_state.gdpr_consent = True
+        st.rerun()
+    return
+Early Return: Blocca esecuzione se consenso non dato
+Rendering disclaimer con bottone accettazione
+Set flag + rerun per sblocco app
+STEP 3 - Rendering UI Core (righe 2219-2227):
+
+Python
+render_sidebar(pharmacy_db)
+render_header(PHASES[st.session_state.current_phase_idx])
+
+if not orchestrator.is_available():
+    st.error("❌ Servizio AI offline. Riprova più tardi.")
+    return
+Sidebar con strutture sanitarie + accessibilità
+Header con progress bar + badge urgenza
+Check disponibilità AI (early return se offline)
+STEP 4 - Display Cronologia Messaggi (righe 2229-2231):
+
+Python
+for msg in st.session_state. messages:
+    with st.chat_message(msg["role"]):
+        st.markdown(msg["content"])
+Iterazione lista messaggi
+st.chat_message() per rendering chat-like (avatar automatico)
+STEP 5 - Check Completamento Triage (righe 2233-2237):
+
+Python
+if st.session_state.current_step == TriageStep.DISPOSITION:
+    render_disposition_summary()
+    save_structured_log()
+    st.stop()
+Se step finale: rendering summary + log + blocco esecuzione
+st.stop() previene re-render loop
+STEP 6 - Input Utente e Chiamata AI (righe 2239-2282):
+
+Python
+if not st.session_state.pending_survey:
+    if raw_input := st.chat_input("💬 Descrivi i sintomi... "):
+        user_input = DataSecurity.sanitize_input(raw_input)
+        
+        # Check emergenze
+        emergency_level = assess_emergency_level(user_input, {})
+        if emergency_level:
+            st. session_state.emergency_level = emergency_level
+            render_emergency_overlay(emergency_level)
+        
+        st.session_state.messages.append({"role": "user", "content": user_input})
+        
+        with st.chat_message("assistant"):
+            placeholder = st.empty()
+            res_gen = orchestrator.call_ai(
+                st.session_state.messages, 
+                PHASES[st.session_state.current_phase_idx]["id"]
+            )
+            
+            # Stream response token by token
+            full_response = ""
+            final_obj = None
+            for chunk in res_gen:
+                if isinstance(chunk, dict):
+                    final_obj = chunk
+                    break
+                full_response += chunk
+                placeholder.markdown(full_response)
+            
+            if final_obj:
+                st. session_state.messages.append({"role": "assistant", "content":  final_obj["testo"]})
+                st.session_state.pending_survey = final_obj
+                
+                # Update metadata + check AUSL Romagna
+                metadata = final_obj.get("metadata", {})
+                update_backend_metadata(metadata)
+                
+                urgency = metadata.get("urgenza", 3)
+                comune_utente = st.session_state.get("user_comune")
+                
+                if comune_utente and should_show_ps_wait_times(comune_utente, urgency):
+                    render_ps_wait_times_alert(comune_utente, urgency, has_cau_alternative=(3.0 <= urgency < 4.5))
+                
+                st.rerun()
+Logica Dettagliata:
+
+Guard Clause: if not st.session_state. pending_survey → solo se nessuna domanda in attesa
+Cattura Input: Walrus operator := per assignment + check
+Sanificazione: DataSecurity.sanitize_input() per XSS prevention
+Check Emergenze: assess_emergency_level() con overlay se rilevato RED/BLACK
+Append Messaggio: Salva input user in history
+Streaming AI:
+st.empty() per placeholder updatable
+Iterazione generatore per token-by-token rendering
+Detection oggetto finale JSON
+Update Stato:
+Append risposta AI a messages
+Salva oggetto survey in pending_survey
+Chiamata update_backend_metadata()
+Smart Routing AUSL Romagna:
+Check comune utente (user_comune)
+Se comune AUSL Romagna + urgenza ≥ 3. 0 → mostra alert tempi PS
+Rerun: st.rerun() per trigger rendering survey
+STEP 7 - Rendering Survey Options (righe 2284-2314):
+
+Python
+if st.session_state.pending_survey and st.session_state.pending_survey.get("opzioni"):
+    st.markdown("---")
+    opts = st.session_state.pending_survey["opzioni"]
+    
+    logger.info(f"🔍 Rendering survey options: {opts}")
+    
+    cols = st.columns(len(opts))
+    for i, opt in enumerate(opts):
+        logger.info(f"🔍 Option [{i}]: value='{opt}', type={type(opt)}")
+        
+        if cols[i].button(opt, key=f"btn_{i}", use_container_width=True):
+            st.session_state. messages.append({"role": "user", "content": opt})
+            
+            current_step = st.session_state.current_step
+            step_name = current_step.name
+            
+            # Validazione per step LOCATION
+            if current_step == TriageStep. LOCATION:
+                is_valid, normalized = InputValidator.validate_location(opt)
+                if is_valid:
+                    st. session_state.collected_data[step_name] = normalized
+                    st.session_state.user_comune = normalized
+                    logger.info(f"✅ Location validated: {normalized}")
+            
+            st.session_state.pending_survey = None
+            advance_step()
+            st.rerun()
+Logica Dettagliata:
+
+Guard Clause: Verifica esistenza pending_survey e chiave opzioni
+Separator: st.markdown("---") per divisione visiva
+Estrazione Opzioni: Lista opts da survey object
+Debug Logging: Log completo opzioni per troubleshooting
+Layout Colonne: Crea N colonne dinamiche (st.columns(len(opts)))
+Loop Rendering:
+Enumerate per indice + valore
+Bottone per opzione con chiave univoca btn_{i}
+Gestione Click:
+Append opzione selezionata a messages
+Validazione LOCATION: Se step = LOCATION:
+Chiamata InputValidator.validate_location()
+Se valido: salva in collected_data[step_name] + user_comune
+Log success
+Clear pending_survey
+Chiamata advance_step() per transizione
+st.rerun() per refresh UI
+STEP 8 - Guard Clause Execution (righe 2317-2318):
+
+Python
+if __name__ == "__main__": 
+    main()
+Pattern standard Python per entry point
+Previene esecuzione automatica se importato come modulo
+Dipendenze Note: Tutte le funzioni/classi del file + st.chat_input, st.empty, st.columns, st.button, st.rerun, st.stop, logger
+
+Tabella Riassuntiva Blocchi 33-38
+Blocco	Righe	Responsabilità Primaria	Componenti Chiave
+33	1935-1996	Text-to-Speech con Web Speech API	Preprocessing testo, lifecycle callbacks, auto-play
+34	1998-2071	Riepilogo finale triage (parte 1)	Recap dati, decision tree raccomandazione
+35	2073-2155	Geolocalizzazione struttura più vicina	Geocoding, query facilities, Google Maps link
+36	2157-2188	Footer azioni post-triage	Reset selettivo, salvataggio log, disclaimer
+37	2190-2203	Aggiornamento backend metadata	Sync backend, specializzazione dinamica
+38	2205-2418	Main loop applicazione (orchestrazione)	8 step sequenziali, gestione eventi, UI rendering
+Note Finali Architetturali
+Coesione Modulare: Ogni blocco ha responsabilità singola e chiara (SRP - Single Responsibility Principle)
+
+Error Handling: Logging pervasivo per debugging post-produzione (33 logger.info/warning/error calls)
+
+Accessibilità: Implementazione WCAG 2.1 Level AA (TTS, aria-labels, alto contrasto, font scaling)
+
+Performance: Streaming AI per UX reattiva, lazy loading strutture sanitarie
+
+Sicurezza: Sanificazione input (XSS prevention), validazione schema JSON AI, GDPR-compliant logging
+
+Estensibilità: Pattern facilmente espandibile per nuove aree cliniche o lingue
