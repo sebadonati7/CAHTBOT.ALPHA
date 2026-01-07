@@ -49,7 +49,7 @@ class TriageResponse(BaseModel):
     @field_validator("opzioni")
     @classmethod
     def validate_options(cls, v: Any, info: Any) -> Any:
-        if info.data. get("tipo_domanda") == QuestionType.SURVEY: 
+        if info.data.get("tipo_domanda") == QuestionType.SURVEY:
             if not v or len(v) < 2:
                 return ["Sì", "No", "Non so"]
         return v

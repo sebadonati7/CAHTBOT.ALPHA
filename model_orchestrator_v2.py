@@ -353,9 +353,9 @@ class ModelOrchestrator:
                 
             except json.JSONDecodeError as e:
                 logger.error(f"❌ JSON DECODE ERROR: {e}")
-                logger.error(f"JSON problematico: {full_response_str[: 500]}")
+                logger.error(f"JSON problematico: {full_response_str[:500]}")
             except ValidationError as e:
-                logger. error(f"❌ PYDANTIC VALIDATION ERROR: {e}")
+                logger.error(f"❌ PYDANTIC VALIDATION ERROR: {e}")
             except Exception as e:
                 logger.error(f"❌ PARSING ERROR: {type(e).__name__} - {str(e)}")
 

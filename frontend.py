@@ -1921,7 +1921,7 @@ def render_disposition_summary():
                 if key not in keys_to_preserve:
                     del st.session_state[key]
             
-            logger. info("New triage started from disposition")
+            logger.info("New triage started from disposition")
             st.rerun()
     
     with c2:

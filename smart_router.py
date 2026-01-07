@@ -65,7 +65,7 @@ class SmartRouter:
         
         # ✅ 4. DIPENDENZE -> SerD
         if "Dipendenze" in area or "Tossicodipendenza" in area or "Alcol" in area:
-            logger. info(f"💊 Routing SerD per area {area}")
+            logger.info(f"💊 Routing SerD per area {area}")
             return {
                 "nome": "SerD (Servizio Dipendenze)",
                 "tipo": "SerD",
