@@ -1,0 +1,6 @@
+streamlit
+groq
+pydantic
+plotly
+requests
+urllib3
