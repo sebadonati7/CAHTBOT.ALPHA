@@ -6,6 +6,8 @@ class QuestionType(str, Enum):
     SURVEY = "survey"
     SCALE = "scale"
     TEXT = "text"
+    INFO_REQUEST = "info_request"  # ✅ NUOVO:  Per richieste non-triage
+    CONFIRMATION = "confirmation"  # ✅ NUOVO: Per validazione dati
 
 class SBARReport(BaseModel):
     """Modello per l'handover strutturato (Fase 5 del protocollo)"""
@@ -31,6 +33,16 @@ class TriageResponse(BaseModel):
     testo: str = Field(..., max_length=1000)
     tipo_domanda: QuestionType
     opzioni: Optional[List[str]] = None
+    
+    # ✅ NUOVO: Tracking fase e memoria
+    fase_corrente: str = Field(
+        description="Fase del protocollo (LOCATION|CHIEF_COMPLAINT|PAIN_SCALE|RED_FLAGS|ANAMNESIS|DISPOSITION|INFO_SERVICES)"
+    )
+    dati_estratti: Dict[str, any] = Field(
+        default_factory=dict,
+        description="Dati estratti automaticamente dal messaggio utente"
+    )
+    
     metadata: TriageMetadata
     sbar:  Optional[SBARReport] = None
     
