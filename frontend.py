@@ -2224,10 +2224,64 @@ def render_disposition_summary():
             save_structured_log()
             st.success("✅ Dati salvati. Puoi chiudere la finestra.")
     
+    # === SEZIONE 5: PULSANTI D'AZIONE (HANDOVER CLINICO) ===
+    st.divider()
+    st.markdown("### 📱 Azioni di Supporto (In Sviluppo)")
+    
+    # Display buttons as specified in schema
+    col_action1, col_action2, col_action3 = st.columns(3)
+    
+    with col_action1:
+        # Button 1: Invia al MMG (Coming soon)
+        if st.button(
+            "📧 Invia al mio Medico\n(In arrivo...)",
+            use_container_width=True,
+            key="btn_send_to_mmg",
+            disabled=True,
+            help="Funzionalità in sviluppo: Invio report SBAR al Medico di Medicina Generale"
+        ):
+            st.info("Questa funzionalità sarà disponibile presto.")
+    
+    with col_action2:
+        # Button 2: Chiama Struttura (Coming soon)
+        telefono = None
+        if nearest and len(nearest) > 0:
+            telefono = nearest[0].get('telefono') or nearest[0].get('contatti', {}).get('telefono')
+        
+        button_label = "📞 Chiama Struttura\n(In arrivo...)"
+        if telefono:
+            button_label = f"📞 Chiama {telefono}\n(In arrivo...)"
+        
+        if st.button(
+            button_label,
+            use_container_width=True,
+            key="btn_call_facility",
+            disabled=True,
+            help="Funzionalità in sviluppo: Chiamata diretta alla struttura"
+        ):
+            st.info("Questa funzionalità sarà disponibile presto.")
+    
+    with col_action3:
+        # Button 3: Mappa per PS (Coming soon)
+        if st.button(
+            "🗺️ Mappa per il PS\n(In arrivo...)",
+            use_container_width=True,
+            key="btn_map_to_ps",
+            disabled=True,
+            help="Funzionalità in sviluppo: Navigazione verso Pronto Soccorso più vicino"
+        ):
+            st.info("Questa funzionalità sarà disponibile presto.")
+    
+    # Explanation box
+    st.caption(
+        "💡 **Nota di Sviluppo**: I pulsanti sopra rappresentano funzionalità in fase di implementazione "
+        "per il supporto al handover clinico (passaggio delle informazioni al personale sanitario)."
+    )
+    
     # DISCLAIMER FINALE
     st.info("ℹ️ **Nota:** Questa valutazione non sostituisce il parere medico. In caso di dubbi, contatta il 118.")
     
-    logger.info(f"Disposition summary rendered: type={rec_type}, urgency={avg_urgency:. 2f}, specialization={specialization}")
+    logger.info(f"Disposition summary rendered: type={rec_type}, urgency={avg_urgency:.2f}, specialization={specialization}")
 
 def update_backend_metadata(metadata):
     """
@@ -2739,7 +2793,10 @@ def render_main_application():
                                     logger.info(f"✅ RED_FLAGS salvato da risposta testuale:  {last_user_msg}")
                                     auto_advance_if_ready()
                     
-                    # 8. Rerun
+                    # 8. Auto-sync session to storage (NUOVO)
+                    auto_sync_session_storage()
+                    
+                    # 9. Rerun
                     st.rerun()
                 
                 except Exception as e:

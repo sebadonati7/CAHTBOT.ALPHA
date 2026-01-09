@@ -40,7 +40,7 @@ class DiagnosisSanitizer:
 class ModelOrchestrator:
     """
     Orchestratore AI con Fallback Groq -> Gemini. 
-    Versione aggiornata per modelli 2025.
+    Versione aggiornata per modelli 2026 - Emilia-Romagna.
     """
     def __init__(self, groq_key: str = "", gemini_key: str = ""):
         self.groq_client = None

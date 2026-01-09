@@ -465,13 +465,40 @@ class SmartRouter:
                 "distance_km": None
             }
         
-        # === MODERATE URGENCY (3) → CAU ===
+        # === MODERATE URGENCY (3) → CAU 2026 (ENHANCED) ===
         if urgency == 3:
-            logger.info(f"⚡ Routing to CAU for urgency {urgency}")
+            logger.info(f"⚡ Routing to CAU 2026 (potenziato) for urgency {urgency}")
             return {
                 "tipo": "CAU",
                 "nome": "CAU (Continuità Assistenziale Urgenze)",
-                "note": "Centro di Assistenza Urgenza per valutazioni senza appuntamento.",
+                "note": (
+                    "Centro di Assistenza Urgenza per valutazioni senza appuntamento. "
+                    "**AGGIORNAMENTO 2026**: I CAU dell'Emilia-Romagna ora offrono "
+                    "accesso h24, servizi diagnostici rapidi (ECG, radiologia di base) "
+                    "e telemedicina. Trova il CAU più vicino tramite il numero unico 116117 "
+                    "o l'app ER Salute."
+                ),
+                "distance_km": None
+            }
+        
+        # === URGENCY 2 → SEARCH SPECIALIZED SERVICES FIRST ===
+        if urgency == 2:
+            logger.info(f"🔍 Searching specialized district services for area: {area}")
+            
+            # Try to find specialized service in knowledge base
+            specialized_service = self._search_specialized_service(location, area)
+            if specialized_service:
+                return specialized_service
+            
+            # If no specialized service, suggest CAU for minor urgency
+            logger.info(f"No specialized service found, routing to CAU")
+            return {
+                "tipo": "CAU",
+                "nome": "CAU (Continuità Assistenziale Urgenze)",
+                "note": (
+                    "Centro di Assistenza Urgenza per valutazioni senza appuntamento. "
+                    "Numero unico 116117 o app ER Salute."
+                ),
                 "distance_km": None
             }
         
@@ -483,6 +510,58 @@ class SmartRouter:
             "note": "Contatta il tuo medico di base per una valutazione nei prossimi giorni.",
             "distance_km": None
         }
+    
+    def _search_specialized_service(self, location: str, area: str) -> Optional[Dict]:
+        """
+        Search for specialized district services in knowledge base.
+        
+        Hierarchical Search (2026):
+        1. Poliambulatori specialistici (es. medicazioni, prelievi)
+        2. Centri dedicati (SerD, Consultori, Diabetologia)
+        3. None (fallback to CAU or MMG)
+        
+        Args:
+            location: Patient's city/town
+            area: Clinical area
+        
+        Returns:
+            Dict with facility info or None
+        """
+        # Mapping area → facility type in KB
+        area_to_service = {
+            "Medicazioni": "poliambulatorio",
+            "Prelievi": "poliambulatorio",
+            "Vaccinazioni": "poliambulatorio",
+            "Diabetologia": "ambulatorio_diabetologia",
+            "Cardiologia": "ambulatorio_cardiologia",
+            "Ortopedia": "ambulatorio_ortopedia"
+        }
+        
+        service_type = area_to_service.get(area)
+        if not service_type:
+            return None
+        
+        # Search in knowledge base
+        facilities = self.structures_kb.get(service_type, [])
+        
+        # Filter by location (fuzzy match)
+        location_lower = location.lower() if location else ""
+        for facility in facilities:
+            facility_comune = facility.get("comune", "").lower()
+            if location_lower in facility_comune or facility_comune in location_lower:
+                logger.info(f"✅ Found specialized service: {facility.get('nome')}")
+                return {
+                    "tipo": service_type,
+                    "nome": facility.get("nome", "Servizio Specialistico"),
+                    "note": (
+                        f"Servizio dedicato per {area}. "
+                        f"Accesso: {facility.get('tipo_accesso', 'Verificare modalità')}. "
+                        f"Telefono: {facility.get('contatti', {}).get('telefono', 'N/D')}"
+                    ),
+                    "distance_km": None
+                }
+        
+        return None
 
 
 # ============================================================================
