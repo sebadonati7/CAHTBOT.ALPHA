@@ -1122,26 +1122,107 @@ def render_sidebar(pharmacy_db):
 # --- SESSION STATE, LOGICA DI AVANZAMENTO E GESTIONE DATI ---
 
 def init_session():
-    """Inizializza lo stato della sessione allineato con il sistema di Privacy."""
+    """
+    Inizializza lo stato della sessione con supporto FSM opzionale.
+    Integra PR #7 mantenendo retrocompatibilità.
+    """
     if "session_id" not in st.session_state:
+        # === 1. IDENTITÀ E TRACKING (Legacy) ===
         st.session_state.session_id = str(uuid.uuid4())
         st.session_state.messages = []
+        
+        # === 2. STATE MACHINE (Legacy + FSM) ===
         st.session_state.current_step = TriageStep.LOCATION
+        st.session_state. collected_data = {}
+        st. session_state.step_completed = {step:  False for step in TriageStep}
         st.session_state.current_phase_idx = 0
-        st.session_state.collected_data = {}
-        st.session_state.step_completed = {step: False for step in TriageStep}
-        st.session_state.metadata_history = []
+        
+        # === 3. ANALYTICS E TEMPI ===
+        st.session_state.step_timestamps = {}
+        st.session_state.session_start = datetime.now()
+        st.session_state[f"{TriageStep.LOCATION. name}_start_time"] = datetime.now()
+        
+        # === 4. SICUREZZA E CONSENSO ===
+        st.session_state.privacy_accepted = False
+        st.session_state.critical_alert = False
         st.session_state.pending_survey = None
         
-        # Allineato con la funzione render_disclaimer
-        st.session_state.privacy_accepted = False 
-        
+        # === 5. ROUTING CLINICO (Legacy) ===
         st.session_state.specialization = "Generale"
-        st.session_state.backend = BackendClient()
+        st.session_state.triage_path = "C"
+        st.session_state.kb_reference = None
+        st.session_state.metadata_history = []
         st.session_state.emergency_level = None
+        
+        # === 6. LOGISTICA TERRITORIALE ===
         st.session_state.user_comune = None
-        logger.info(f"Nuova sessione inizializzata: {st.session_state.session_id}")
+        st.session_state.backend = BackendClient()
+        
+        # === 7. QUALITÀ AI ===
+        st.session_state.ai_retry_count = {}
+        
+        # ============================================
+        # 🆕 INTEGRAZIONE FSM (PR #7)
+        # ============================================
+        if FSM_ENABLED: 
+            try:
+                # A. ID Manager per sessioni atomiche
+                id_manager = IDManager()
+                fsm_session_id = id_manager.generate_new_id()
+                
+                # B. Inizializza TriageState con Path di default
+                st.session_state.triage_state = TriageState(
+                    session_id=fsm_session_id,
+                    assigned_path=TriagePath.C,  # Default: Standard
+                    assigned_branch=TriageBranch. TRIAGE,
+                    current_phase=TriagePhase. INTENT_DETECTION
+                )
+                
+                # C. Bridge per sincronizzazione dati
+                st.session_state.fsm_bridge = TriageSessionBridge()
+                
+                # D. Router per classificazione urgenza
+                st.session_state.router = SmartRouter()
+                
+                # E. Normalizzatore sintomi
+                st. session_state.symptom_normalizer = SymptomNormalizer()
+                
+                logger.info(f"✅ FSM inizializzato | Session:  {fsm_session_id} | Path: {TriagePath.C. name}")
+                
+            except Exception as e: 
+                logger.error(f"❌ Errore inizializzazione FSM: {e}", exc_info=True)
+                FSM_ENABLED = False
+        
+        logger.info(f"Sessione inizializzata:  {st.session_state.session_id} | FSM: {FSM_ENABLED}")
 
+# ============================================
+# FSM:  CLASSIFICAZIONE INIZIALE URGENZA
+# ============================================
+def classify_initial_urgency_fsm(user_input:  str) -> Optional[UrgencyScore]:
+    """
+    Usa SmartRouter per classificare l'urgenza del primo messaggio.
+    Ritorna UrgencyScore con path assegnato (A/B/C).
+    """
+    if not FSM_ENABLED or not st.session_state.get('router'):
+        return None
+    
+    try:
+        router = st.session_state.router
+        urgency_score = router.classify_initial_urgency(user_input)
+        
+        # Aggiorna triage_state con il path assegnato
+        if hasattr(st.session_state, 'triage_state'):
+            st.session_state. triage_state.assigned_path = urgency_score.assigned_path
+            st.session_state.triage_state.assigned_branch = urgency_score.assigned_branch
+            
+            logger.info(f"🎯 Classificazione FSM | Path: {urgency_score.assigned_path.name} | "
+                       f"Score: {urgency_score.score}/5 | Branch: {urgency_score.assigned_branch.name}")
+        
+        return urgency_score
+        
+    except Exception as e: 
+        logger.error(f"❌ Errore classificazione FSM: {e}", exc_info=True)
+        return None
 
 def advance_step() -> bool:
     """Avanza allo step successivo del triage utilizzando i valori dell'Enum."""
@@ -2355,9 +2436,49 @@ def render_main_application():
             logger.info("✅ Orchestrator configurato con chiavi API")
         
         # Input utente
-        if raw_input := st.chat_input("💬 Descrivi la situazione...  "):
+        if raw_input := st.chat_input("💬 Descrivi la situazione..."):
             # 1. Sanificazione Input
             user_input = DataSecurity.sanitize_input(raw_input)
+    
+            # ============================================
+            # 🆕 FSM: CLASSIFICAZIONE PRIMO MESSAGGIO
+            # ============================================
+            is_first_message = len(st.session_state.messages) == 0
+    
+            if FSM_ENABLED and is_first_message:
+                urgency_score = classify_initial_urgency_fsm(user_input)
+        
+                if urgency_score:
+                    # A. Se richiede 118 immediato
+                    if urgency_score.requires_immediate_118:
+                        st.session_state.emergency_level = EmergencyLevel.RED
+                        render_emergency_overlay(EmergencyLevel.RED)
+                        logger.critical(f"🚨 118 IMMEDIATO rilevato da FSM | Rationale: {urgency_score. rationale}")
+            
+                    # B. Se path Mental Health (B) con branch INFO
+                    elif urgency_score. assigned_path == TriagePath.B and urgency_score.assigned_branch == TriageBranch. INFORMAZIONI:
+                        st.info(f"ℹ️ Rilevata richiesta informativa su salute mentale")
+                        logger.info(f"📘 Branch INFORMAZIONI attivato | Rationale: {urgency_score.rationale}")
+            
+                    # C. Path Emergency (A) - Max 3 domande
+                    elif urgency_score.assigned_path == TriagePath.A: 
+                        st.session_state. triage_path = "A"
+                        st. warning(f"⚠️ Percorso Emergenza attivato | Urgenza: {urgency_score. score}/5")
+                        logger. warning(f"🚨 Path A (Emergency) | Score: {urgency_score.score} | Flags: {urgency_score.detected_red_flags}")
+            
+                    # D.  Estrazione entità con FSM
+                    if st.session_state.get('fsm_bridge'):
+                        extracted_data = st.session_state.fsm_bridge.extract_entities_from_text(user_input)
+                        if extracted_data:
+                            # Sincronizza con TriageState
+                            st. session_state.triage_state = st.session_state.fsm_bridge.sync_session_context(
+                                st.session_state.triage_state,
+                                extracted_data
+                            )
+                            logger.info(f"✅ Dati estratti da FSM:  {list(extracted_data.keys())}")
+    
+    # 2. Check Emergenza Immediata (Text-based Legacy)
+    emergency_level = assess_emergency_level(user_input, {})
             
             # 2. Check Emergenza Immediata (Text-based)
             emergency_level = assess_emergency_level(user_input, {})
@@ -2445,7 +2566,39 @@ def render_main_application():
                         if metadata: 
                             # Sincronizzazione stato backend
                             update_backend_metadata(metadata)
-                            
+                            # ============================================
+                            # 🆕 FSM: SINCRONIZZAZIONE DATI
+                            # ============================================
+                            if FSM_ENABLED and st.session_state.get('fsm_bridge') and st.session_state.get('triage_state'):
+                                try:
+                                    # A. Estrai dati dal testo AI se presenti
+                                    if full_text_vis: 
+                                        fsm_extracted = st.session_state.fsm_bridge.extract_entities_from_text(full_text_vis)
+                                        if fsm_extracted:
+                                            # Sincronizza con TriageState
+                                            st.session_state.triage_state = st. session_state.fsm_bridge.sync_session_context(
+                                                st.session_state. triage_state,
+                                                fsm_extracted
+                                            )
+        
+                                    # B. Sincronizza collected_data legacy con FSM
+                                    if st.session_state.collected_data:
+                                        st.session_state.triage_state = st.session_state. fsm_bridge.sync_session_context(
+                                            st.session_state.triage_state,
+                                            st.session_state. collected_data
+                                        )
+        
+                                    # C. Verifica completezza triage
+                                    validation = st.session_state.fsm_bridge.validate_triage_completeness(
+                                        st.session_state. triage_state
+                                    )
+        
+                                    if validation['can_proceed_disposition'] and not validation['is_complete']:
+                                        logger.info(f"⚠️ Triage parziale ma sufficiente per disposition | "
+                                                    f"Completezza: {validation['completion_percentage']:.1%}")
+        
+                                except Exception as e:
+                                    logger.error(f"❌ Errore sincronizzazione FSM: {e}", exc_info=True)
                             # Verifica emergenze dai metadati
                             emergency_level = assess_emergency_level(user_input, metadata)
                             if emergency_level:
