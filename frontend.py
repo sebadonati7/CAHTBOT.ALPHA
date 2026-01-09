@@ -2441,8 +2441,14 @@ def init_session():
     # Se è attivato il session storage e la sessione è nuova, cerca di recuperare
     if SESSION_STORAGE_ENABLED and st.session_state.get('_last_storage_sync') is None:
         # Controlla se c'è un session_id nei query params per cross-instance sync
-        query_params = st.experimental_get_query_params()
-        stored_session_id = query_params.get('session_id', [None])[0]
+        try:
+            # Try new API first (Streamlit >= 1.30)
+            query_params = st.query_params
+            stored_session_id = query_params.get('session_id')
+        except AttributeError:
+            # Fallback to experimental API for older versions
+            query_params = st.experimental_get_query_params()
+            stored_session_id = query_params.get('session_id', [None])[0]
         
         if stored_session_id:
             logger.info(f"🔍 Tentativo di caricamento sessione da storage: {stored_session_id}")
