@@ -10,6 +10,31 @@ import requests
 import math
 import difflib  # Aggiunta per il matching dei comuni
 from datetime import datetime
+# ============================================
+# IMPORT FSM DA PR #7
+# ============================================
+try:
+    from models import (
+        TriageState, 
+        TriagePath, 
+        TriagePhase, 
+        TriageBranch,
+        PatientInfo,
+        ClinicalData,
+        TriageMetadata,
+        DispositionRecommendation
+    )
+    from bridge import TriageSessionBridge
+    from smart_router import SmartRouter, UrgencyScore
+    from utils.id_manager import IDManager
+    from utils. symptom_normalizer import SymptomNormalizer
+    
+    FSM_ENABLED = True
+    logger.info("✅ Moduli FSM caricati con successo (PR #7)")
+except ImportError as e:
+    FSM_ENABLED = False
+    logger.warning(f"⚠️ FSM non disponibile - usando logica legacy: {e}")
+    logger.info("💡 Verifica che i file models.py, bridge.py, smart_router.py esistano")
 
 # --- TIPIZZAZIONE E STRUTTURE DATI ---
 from typing import List, Dict, Any, Optional, Union, Generator, Tuple, Callable
@@ -2630,4 +2655,5 @@ def main():
 
 
 if __name__ == "__main__":
+
     main()
