@@ -34,7 +34,28 @@ CORS(app)  # Enable CORS for Streamlit frontend
 
 # Get storage instance
 storage = get_storage()
+# --- API KEY / AUTHN (inserire dopo `storage = get_storage()`) ---
+import os
+from functools import wraps
 
+# Legge la chiave dall'ambiente. Fallback non usato in produzione.
+API_KEY = os.environ.get("BACKEND_API_KEY", "test-key-locale")
+
+def api_key_required(f):
+    """Decorator che valida l'header Authorization: Bearer <key>"""
+    @wraps(f)
+    def decorated(*args, **kwargs):
+        auth = request.headers.get("Authorization", "")
+        if not auth or not auth.startswith("Bearer "):
+            logger.warning("Auth failed: missing bearer token")
+            return jsonify({'success': False, 'error': 'Missing Authorization Bearer token'}), 401
+        token = auth.split(" ", 1)[1]
+        # confronto in modo costante per evitare timing attacks in ambienti critici
+        if token != API_KEY:
+            logger.warning("Auth failed: invalid api key")
+            return jsonify({'success': False, 'error': 'Invalid API key'}), 403
+        return f(*args, **kwargs)
+    return decorated
 # ============================================================================
 # HEALTH CHECK
 # ============================================================================
