@@ -1214,7 +1214,7 @@ def init_session():
 # ============================================
 # FSM:  CLASSIFICAZIONE INIZIALE URGENZA
 # ============================================
-def classify_initial_urgency_fsm(user_input:  str) -> Optional[UrgencyScore]:
+def classify_initial_urgency_fsm(user_input:  str) -> Optional['UrgencyScore']:
     """
     Usa SmartRouter per classificare l'urgenza del primo messaggio.
     Ritorna UrgencyScore con path assegnato (A/B/C).
@@ -2963,4 +2963,3 @@ def main():
 if __name__ == "__main__":
 
     main()
-
