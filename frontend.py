@@ -3,12 +3,16 @@ import json
 import time
 import uuid
 import os
-import logging
 import random
 import re
 import requests
 import math
 import difflib  # Aggiunta per il matching dei comuni
+import logging
+
+# Configurazione base del logger
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 from datetime import datetime
 # ============================================
 # IMPORT FSM DA PR #7
@@ -2804,3 +2808,4 @@ def main():
 if __name__ == "__main__":
 
     main()
+
