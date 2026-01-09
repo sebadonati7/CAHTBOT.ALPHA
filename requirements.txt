@@ -7,3 +7,5 @@ urllib3
 numpy
 xlsxwriter
 google-generativeai
+flask
+flask-cors
