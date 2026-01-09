@@ -3,7 +3,6 @@ import json
 import time
 import uuid
 import os
-import random
 import re
 import requests
 import math
@@ -53,7 +52,7 @@ except ImportError as e:
     logger.info("💡 Verifica che i file models.py, bridge.py, smart_router.py esistano")
 
 # --- TIPIZZAZIONE E STRUTTURE DATI ---
-from typing import List, Dict, Any, Optional, Union, Generator, Tuple, Callable
+from typing import List, Dict, Any, Optional, Tuple
 from enum import Enum
 
 # --- GESTIONE RETE E API ---
