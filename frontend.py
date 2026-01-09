@@ -43,7 +43,7 @@ try:
     from bridge import TriageSessionBridge
     from smart_router import SmartRouter, UrgencyScore
     from utils.id_manager import IDManager
-    from utils. symptom_normalizer import SymptomNormalizer
+    # NOTE: SymptomNormalizer is now part of model_orchestrator_v2.py
     
     FSM_ENABLED = True
     logger.info("✅ Moduli FSM caricati con successo (PR #7)")
@@ -1150,7 +1150,7 @@ def init_session():
         # === 2. STATE MACHINE (Legacy + FSM) ===
         st.session_state.current_step = TriageStep.LOCATION
         st.session_state. collected_data = {}
-        st. session_state.step_completed = {step:  False for step in TriageStep}
+        st.session_state.step_completed = {step: False for step in TriageStep}
         st.session_state.current_phase_idx = 0
         
         # === 3. ANALYTICS E TEMPI ===
@@ -1191,7 +1191,7 @@ def init_session():
                     session_id=fsm_session_id,
                     assigned_path=TriagePath.C,  # Default: Standard
                     assigned_branch=TriageBranch. TRIAGE,
-                    current_phase=TriagePhase. INTENT_DETECTION
+                    current_phase=TriagePhase.INTENT_DETECTION
                 )
                 
                 # C. Bridge per sincronizzazione dati
@@ -1200,8 +1200,8 @@ def init_session():
                 # D. Router per classificazione urgenza
                 st.session_state.router = SmartRouter()
                 
-                # E. Normalizzatore sintomi
-                st. session_state.symptom_normalizer = SymptomNormalizer()
+                # E. Normalizzatore sintomi (now integrated in ModelOrchestrator)
+                # SymptomNormalizer is accessed via model_orchestrator.symptom_normalizer
                 
                 logger.info(f"✅ FSM inizializzato | Session:  {fsm_session_id} | Path: {TriagePath.C. name}")
                 
@@ -1209,7 +1209,7 @@ def init_session():
                 logger.error(f"❌ Errore inizializzazione FSM: {e}", exc_info=True)
                 FSM_ENABLED = False
         
-        logger.info(f"Sessione inizializzata:  {st.session_state.session_id} | FSM: {FSM_ENABLED}")
+        logger.info(f"Sessione inizializzata: {st.session_state.session_id} | FSM: {FSM_ENABLED}")
 
 # ============================================
 # FSM:  CLASSIFICAZIONE INIZIALE URGENZA

@@ -38,8 +38,14 @@ storage = get_storage()
 import os
 from functools import wraps
 
-# Legge la chiave dall'ambiente. Fallback non usato in produzione.
-API_KEY = os.environ.get("BACKEND_API_KEY", "test-key-locale")
+# Legge la chiave dall'ambiente. NOTA: In produzione DEVE essere configurata.
+API_KEY = os.environ.get("BACKEND_API_KEY")
+if not API_KEY:
+    logger.error("⚠️ BACKEND_API_KEY not set! Backend API will not start.")
+    raise ValueError(
+        "BACKEND_API_KEY must be set as environment variable. "
+        "Set it in your environment or .streamlit/secrets.toml"
+    )
 
 def api_key_required(f):
     """Decorator che valida l'header Authorization: Bearer <key>"""
