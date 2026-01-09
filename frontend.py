@@ -43,7 +43,7 @@ try:
     from bridge import TriageSessionBridge
     from smart_router import SmartRouter, UrgencyScore
     from utils.id_manager import IDManager
-    from utils. symptom_normalizer import SymptomNormalizer
+    # NOTE: SymptomNormalizer is now part of model_orchestrator_v2.py
     
     FSM_ENABLED = True
     logger.info("✅ Moduli FSM caricati con successo (PR #7)")
@@ -1150,7 +1150,7 @@ def init_session():
         # === 2. STATE MACHINE (Legacy + FSM) ===
         st.session_state.current_step = TriageStep.LOCATION
         st.session_state. collected_data = {}
-        st. session_state.step_completed = {step:  False for step in TriageStep}
+        st.session_state.step_completed = {step: False for step in TriageStep}
         st.session_state.current_phase_idx = 0
         
         # === 3. ANALYTICS E TEMPI ===
@@ -1191,7 +1191,7 @@ def init_session():
                     session_id=fsm_session_id,
                     assigned_path=TriagePath.C,  # Default: Standard
                     assigned_branch=TriageBranch. TRIAGE,
-                    current_phase=TriagePhase. INTENT_DETECTION
+                    current_phase=TriagePhase.INTENT_DETECTION
                 )
                 
                 # C. Bridge per sincronizzazione dati
@@ -1200,8 +1200,8 @@ def init_session():
                 # D. Router per classificazione urgenza
                 st.session_state.router = SmartRouter()
                 
-                # E. Normalizzatore sintomi
-                st. session_state.symptom_normalizer = SymptomNormalizer()
+                # E. Normalizzatore sintomi (now integrated in ModelOrchestrator)
+                # SymptomNormalizer is accessed via model_orchestrator.symptom_normalizer
                 
                 logger.info(f"✅ FSM inizializzato | Session:  {fsm_session_id} | Path: {TriagePath.C. name}")
                 
@@ -1209,7 +1209,7 @@ def init_session():
                 logger.error(f"❌ Errore inizializzazione FSM: {e}", exc_info=True)
                 FSM_ENABLED = False
         
-        logger.info(f"Sessione inizializzata:  {st.session_state.session_id} | FSM: {FSM_ENABLED}")
+        logger.info(f"Sessione inizializzata: {st.session_state.session_id} | FSM: {FSM_ENABLED}")
 
 # ============================================
 # FSM:  CLASSIFICAZIONE INIZIALE URGENZA
@@ -1598,12 +1598,121 @@ def save_structured_log():
             try:
                 sync_session_to_storage(st.session_state.session_id, st.session_state)
                 logger.info(f"✅ Session synced to storage: {st.session_state.session_id}")
-            except Exception as sync_error:
-                logger.error(f"❌ Failed to sync to storage: {sync_error}")
+            except Exception as e:
+                logger.error(f"❌ Session sync failed: {e}")
+        
+        # 🆕 V2: SYNC TO BACKEND API
+        try:
+            send_triage_to_backend(log_entry, clinical_summary, outcome)
+        except Exception as e:
+            logger.error(f"❌ Backend sync failed: {e}")
+            # Non blocchiamo il flusso se il backend è offline
     
     except Exception as e:
-        logger.error(f"Failed to save structured log: {e}", exc_info=True)
+        logger.error(f"Errore salvataggio log: {e}")
 
+
+def send_triage_to_backend(log_entry: dict, clinical_summary: dict, outcome: dict):
+    """
+    Send completed triage data to backend API for reporting (NEW FOR V2).
+    
+    Args:
+        log_entry: Complete log entry with all session data
+        clinical_summary: Clinical data summary
+        outcome: Disposition outcome data
+    """
+    try:
+        # Get backend configuration from secrets
+        backend_url = st.secrets.get("BACKEND_URL")
+        backend_api_key = st.secrets.get("BACKEND_API_KEY")
+        
+        if not backend_url or not backend_api_key:
+            logger.warning("⚠️ Backend URL or API key not configured in secrets.toml")
+            return
+        
+        # Load district mapping
+        district_data = {}
+        if os.path.exists("distretti_sanitari_er.json"):
+            with open("distretti_sanitari_er.json", 'r', encoding='utf-8') as f:
+                district_data = json.load(f)
+        
+        # Get comune and map to district
+        comune = clinical_summary.get('location') or st.session_state.get('user_comune')
+        distretto = "UNKNOWN"
+        
+        if comune and district_data:
+            comune_lower = comune.lower().strip()
+            mapping = district_data.get("comune_to_district_mapping", {})
+            distretto = mapping.get(comune_lower, "UNKNOWN")
+        
+        # Determine path from metadata
+        path = "PERCORSO_C"  # Default
+        if st.session_state.get('emergency_level'):
+            path = "PERCORSO_A"
+        elif st.session_state.get('specialization') == "mental_health":
+            path = "PERCORSO_B"
+        
+        # Build SBAR if available
+        sbar = {}
+        if 'DISPOSITION' in st.session_state.collected_data:
+            disp_data = st.session_state.collected_data['DISPOSITION']
+            sbar = {
+                "situation": clinical_summary.get('chief_complaint', ''),
+                "background": f"Età: {clinical_summary.get('age', 'N/A')}, Località: {comune}",
+                "assessment": f"Red Flags: {', '.join(clinical_summary.get('red_flags', []))}",
+                "recommendation": outcome.get('disposition', '')
+            }
+        
+        # Prepare payload
+        payload = {
+            "session_id": log_entry.get("session_id"),
+            "timestamp": log_entry.get("timestamp_end"),
+            "comune": comune,
+            "distretto": distretto,
+            "path": path,
+            "urgency": outcome.get("urgency_level", 3),
+            "disposition": outcome.get("disposition", "Unknown"),
+            "sbar": sbar,
+            "log": {
+                "messages": [{"role": m.get("role"), "content": m.get("content")} 
+                            for m in st.session_state.messages[:10]],  # First 10 messages
+                "collected_data": st.session_state.collected_data,
+                "total_duration": log_entry.get("total_duration_seconds")
+            }
+        }
+        
+        # Send to backend
+        headers = {
+            "Authorization": f"Bearer {backend_api_key}",
+            "Content-Type": "application/json"
+        }
+        
+        endpoint = f"{backend_url.rstrip('/')}/triage/complete"
+        
+        response = requests.post(
+            endpoint,
+            json=payload,
+            headers=headers,
+            timeout=5
+        )
+        
+        if response.status_code == 200:
+            logger.info(f"✅ Triage data sent to backend: {log_entry.get('session_id')}")
+        else:
+            logger.warning(f"⚠️ Backend returned status {response.status_code}: {response.text}")
+    
+    except requests.exceptions.Timeout:
+        logger.warning("⚠️ Backend request timeout - continuing without sync")
+    except requests.exceptions.ConnectionError:
+        logger.warning("⚠️ Backend connection failed - continuing without sync")
+    except Exception as e:
+        logger.error(f"❌ Error sending to backend: {e}")
+        # Don't raise - we don't want to break the user flow
+
+
+# ============================================
+# HISTORY MANAGEMENT
+# ============================================
 
 def auto_sync_session_storage():
     """

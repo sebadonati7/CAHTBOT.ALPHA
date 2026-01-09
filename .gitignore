@@ -24,7 +24,15 @@ ENV/
 Thumbs.db
 
 # Streamlit
-.streamlit/
+.streamlit/secrets.toml
+.streamlit/config.toml
 
 # Logs (keep triage_logs.jsonl as it's data)
 *.log
+
+# Session storage
+sessions/
+
+# Data files
+data/*.lock
+data/*.tmp

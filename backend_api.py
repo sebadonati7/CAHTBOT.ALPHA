@@ -38,8 +38,14 @@ storage = get_storage()
 import os
 from functools import wraps
 
-# Legge la chiave dall'ambiente. Fallback non usato in produzione.
-API_KEY = os.environ.get("BACKEND_API_KEY", "test-key-locale")
+# Legge la chiave dall'ambiente. NOTA: In produzione DEVE essere configurata.
+API_KEY = os.environ.get("BACKEND_API_KEY")
+if not API_KEY:
+    logger.error("⚠️ BACKEND_API_KEY not set! Backend API will not start.")
+    raise ValueError(
+        "BACKEND_API_KEY must be set as environment variable. "
+        "Set it in your environment or .streamlit/secrets.toml"
+    )
 
 def api_key_required(f):
     """Decorator che valida l'header Authorization: Bearer <key>"""
@@ -63,10 +69,11 @@ def api_key_required(f):
 @app.route('/health', methods=['GET'])
 def health_check():
     """Health check endpoint."""
+    from datetime import datetime
     return jsonify({
         'status': 'healthy',
         'service': 'CAHTBOT Backend API',
-        'version': '2026.1.0'
+        'version': f'{datetime.now().year}.1.0'
     }), 200
 
 
@@ -75,6 +82,7 @@ def health_check():
 # ============================================================================
 
 @app.route('/session/<session_id>', methods=['GET'])
+@api_key_required
 def get_session(session_id: str):
     """
     Get session state by ID.
@@ -113,6 +121,7 @@ def get_session(session_id: str):
 
 
 @app.route('/session/<session_id>', methods=['POST'])
+@api_key_required
 def update_session(session_id: str):
     """
     Update or create session state.
@@ -176,6 +185,7 @@ def update_session(session_id: str):
 
 
 @app.route('/session/<session_id>', methods=['DELETE'])
+@api_key_required
 def delete_session(session_id: str):
     """
     Delete session by ID.
@@ -217,6 +227,7 @@ def delete_session(session_id: str):
 # ============================================================================
 
 @app.route('/sessions/active', methods=['GET'])
+@api_key_required
 def list_active_sessions():
     """
     List all active sessions with metadata.
@@ -244,6 +255,7 @@ def list_active_sessions():
 
 
 @app.route('/sessions/cleanup', methods=['POST'])
+@api_key_required
 def cleanup_old_sessions():
     """
     Clean up sessions older than specified hours.
@@ -302,14 +314,104 @@ def internal_error(error):
 
 
 # ============================================================================
+# TRIAGE REPORTING ENDPOINT (NEW FOR V2)
+# ============================================================================
+
+@app.route('/triage/complete', methods=['POST'])
+@api_key_required
+def receive_triage_completion():
+    """
+    Receive completed triage session data for reporting.
+    
+    Expected JSON body:
+    {
+        "session_id": "0001_090126",
+        "timestamp": "2026-01-09T19:30:00Z",
+        "comune": "Bologna",
+        "distretto": "BOL-CIT",
+        "path": "PERCORSO_C",
+        "urgency": 3,
+        "disposition": "CAU",
+        "sbar": {
+            "situation": "...",
+            "background": "...",
+            "assessment": "...",
+            "recommendation": "..."
+        },
+        "log": {
+            "messages": [...],
+            "collected_data": {...}
+        }
+    }
+    
+    Returns:
+        200: Data received successfully
+        400: Invalid request
+        500: Server error
+    """
+    try:
+        from datetime import datetime
+        import json
+        triage_data = request.get_json()
+        
+        if not triage_data:
+            return jsonify({
+                'success': False,
+                'error': 'No data provided'
+            }), 400
+        
+        # Validate required fields
+        required_fields = ['session_id', 'comune', 'path']
+        missing_fields = [f for f in required_fields if f not in triage_data]
+        
+        if missing_fields:
+            return jsonify({
+                'success': False,
+                'error': f'Missing required fields: {", ".join(missing_fields)}'
+            }), 400
+        
+        # Add reception timestamp
+        triage_data['received_at'] = datetime.now().isoformat()
+        
+        # Save to triage_logs.jsonl
+        log_file = "triage_logs.jsonl"
+        try:
+            with open(log_file, 'a', encoding='utf-8') as f:
+                f.write(json.dumps(triage_data, ensure_ascii=False) + '\n')
+            
+            logger.info(f"✅ POST /triage/complete - Session {triage_data['session_id']} logged")
+            
+            return jsonify({
+                'success': True,
+                'session_id': triage_data['session_id'],
+                'message': 'Triage data received and logged'
+            }), 200
+            
+        except Exception as file_error:
+            logger.error(f"❌ Failed to write to log file: {file_error}")
+            return jsonify({
+                'success': False,
+                'error': 'Failed to write log file'
+            }), 500
+    
+    except Exception as e:
+        logger.error(f"❌ POST /triage/complete - Error: {e}")
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
+
+
+# ============================================================================
 # MAIN
 # ============================================================================
 
 if __name__ == '__main__':
+    from datetime import datetime
     logger.info("=" * 60)
     logger.info("🚀 CAHTBOT Backend API Starting")
     logger.info("=" * 60)
-    logger.info("Version: 2026.1.0")
+    logger.info(f"Version: {datetime.now().year}.1.0")
     logger.info("Storage: SessionStorage (file-based)")
     logger.info("Port: 5000")
     logger.info("=" * 60)

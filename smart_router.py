@@ -465,15 +465,15 @@ class SmartRouter:
                 "distance_km": None
             }
         
-        # === MODERATE URGENCY (3) → CAU 2026 (ENHANCED) ===
+        # === MODERATE URGENCY (3) → CAU (ENHANCED) ===
         if urgency == 3:
-            logger.info(f"⚡ Routing to CAU 2026 (potenziato) for urgency {urgency}")
+            logger.info(f"⚡ Routing to CAU (potenziato) for urgency {urgency}")
             return {
                 "tipo": "CAU",
                 "nome": "CAU (Continuità Assistenziale Urgenze)",
                 "note": (
                     "Centro di Assistenza Urgenza per valutazioni senza appuntamento. "
-                    "**AGGIORNAMENTO 2026**: I CAU dell'Emilia-Romagna ora offrono "
+                    "**AGGIORNAMENTO**: I CAU dell'Emilia-Romagna ora offrono "
                     "accesso h24, servizi diagnostici rapidi (ECG, radiologia di base) "
                     "e telemedicina. Trova il CAU più vicino tramite il numero unico 116117 "
                     "o l'app ER Salute."
@@ -515,7 +515,7 @@ class SmartRouter:
         """
         Search for specialized district services in knowledge base.
         
-        Hierarchical Search (2026):
+        Hierarchical Search:
         1. Poliambulatori specialistici (es. medicazioni, prelievi)
         2. Centri dedicati (SerD, Consultori, Diabetologia)
         3. None (fallback to CAU or MMG)
