@@ -63,10 +63,11 @@ def api_key_required(f):
 @app.route('/health', methods=['GET'])
 def health_check():
     """Health check endpoint."""
+    from datetime import datetime
     return jsonify({
         'status': 'healthy',
         'service': 'CAHTBOT Backend API',
-        'version': '2026.1.0'
+        'version': f'{datetime.now().year}.1.0'
     }), 200
 
 
@@ -306,10 +307,11 @@ def internal_error(error):
 # ============================================================================
 
 if __name__ == '__main__':
+    from datetime import datetime
     logger.info("=" * 60)
     logger.info("🚀 CAHTBOT Backend API Starting")
     logger.info("=" * 60)
-    logger.info("Version: 2026.1.0")
+    logger.info(f"Version: {datetime.now().year}.1.0")
     logger.info("Storage: SessionStorage (file-based)")
     logger.info("Port: 5000")
     logger.info("=" * 60)
