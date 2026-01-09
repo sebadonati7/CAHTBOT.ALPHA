@@ -40,7 +40,7 @@ class DiagnosisSanitizer:
 class ModelOrchestrator:
     """
     Orchestratore AI con Fallback Groq -> Gemini. 
-    Versione aggiornata per modelli 2025.
+    Versione aggiornata per modelli 2026 - Emilia-Romagna.
     """
     def __init__(self, groq_key: str = "", gemini_key: str = ""):
         self.groq_client = None
@@ -81,12 +81,55 @@ class ModelOrchestrator:
                 "Sei l'AI Health Navigator. NON SEI UN MEDICO.\n"
                 "- SINGLE QUESTION POLICY:  Una sola domanda alla volta.\n"
                 "- NO DIAGNOSI:  Non nominare malattie o cure.\n"
-                "- SLOT FILLING: Non chiedere dati già forniti."
+                "- SLOT FILLING: Non chiedere dati già forniti.\n"
+                "- FORMATO OPZIONI: Fornisci SEMPRE 3 opzioni (A, B, C) per ogni domanda quando possibile.\n"
+                "- INPUT IBRIDO: L'utente può scegliere un'opzione O scrivere testo libero."
             ),
-            "percorso_a": "EMERGENZA:  Max 3 domande rapide e mirate alla sicurezza territoriale.",
-            "percorso_b": "SALUTE MENTALE: Tono empatico.  Includere riferimenti se necessario (1522, Telefono Amico).",
-            "percorso_c": "STANDARD: Valuta scala dolore (1-10) e anamnesi recente.",
-            "disposition_prompt": "FASE FINALE: Genera una sintesi chiara e una raccomandazione sulla struttura."
+            "percorso_a": (
+                "EMERGENZA (Path A - Max 3 domande):\n"
+                "1. LOCATION: Comune (testo libero)\n"
+                "2. CHIEF_COMPLAINT: Sintomo con opzioni A/B/C\n"
+                "3. RED_FLAGS: Una domanda critica con opzioni A/B/C\n"
+                "Poi procedi a DISPOSITION. NO anamnesi completa."
+            ),
+            "percorso_b": (
+                "SALUTE MENTALE (Path B - Con consenso):\n"
+                "- Tono empatico e rispettoso\n"
+                "- Prima richiedi consenso per domande personali\n"
+                "- Opzioni A/B/C per tipologia disagio\n"
+                "- Include hotline se necessario (1522, Telefono Amico 02 2327 2327, 118)"
+            ),
+            "percorso_c": (
+                "STANDARD (Path C - Protocollo completo):\n"
+                "1. LOCATION: Comune (testo libero)\n"
+                "2. CHIEF_COMPLAINT: Sintomo con opzioni A/B/C\n"
+                "3. PAIN_SCALE: Scala 1-10 con descrittori\n"
+                "4. RED_FLAGS: Opzioni A/B/C per sintomi critici\n"
+                "5. ANAMNESIS: Età, sesso, gravidanza, farmaci (una alla volta)\n"
+                "6. Procedi a DISPOSITION"
+            ),
+            "disposition_prompt": (
+                "FASE FINALE (DISPOSITION):\n"
+                "Genera report SBAR strutturato:\n"
+                "S (Situation): Sintomo principale + intensità\n"
+                "B (Background): Età, sesso, localizzazione, anamnesi\n"
+                "A (Assessment): Red flags rilevati, urgenza\n"
+                "R (Recommendation): Struttura sanitaria consigliata\n"
+                "NO opzioni - solo testo informativo e raccomandazione."
+            ),
+            "abc_format_instruction": (
+                "FORMATO OBBLIGATORIO OPZIONI A/B/C:\n"
+                "Presenta sempre 3 opzioni chiare e distinte:\n"
+                "a) Prima opzione (più comune/probabile)\n"
+                "b) Seconda opzione (alternativa)\n"
+                "c) Terza opzione (es. 'Altro' o 'Non sono sicuro/a')\n\n"
+                "L'utente può:\n"
+                "- Cliccare su un pulsante\n"
+                "- Scrivere 'a', 'b' o 'c'\n"
+                "- Scrivere testo libero (che tu interpreterai)\n\n"
+                "Se l'utente scrive testo libero che non corrisponde alle opzioni, "
+                "estrailo come dato in 'dati_estratti' e conferma brevemente."
+            )
         }
     
     def _build_context_section(self, collected_data: Dict) -> str:
@@ -276,10 +319,16 @@ RISPONDI IN JSON:
         
         context_section = self._build_context_section(collected_data)
         next_slot_info = self._determine_next_slot(collected_data, phase)
-        path_instruction = self. prompts. get(f"percorso_{path. lower()}", self.prompts["percorso_c"])
+        path_instruction = self.prompts.get(f"percorso_{path.lower()}", self.prompts["percorso_c"])
+        
+        # Aggiungi istruzioni A/B/C per fasi non-DISPOSITION
+        abc_instruction = ""
+        if phase != "DISPOSITION" and phase != "LOCATION":
+            abc_instruction = f"\n\n{self.prompts['abc_format_instruction']}"
         
         if phase == "DISPOSITION":
             path_instruction = self.prompts["disposition_prompt"]
+            abc_instruction = ""  # No options for final disposition
         
         return f"""
 {self.prompts['base_rules']}
@@ -287,9 +336,10 @@ RISPONDI IN JSON:
 CONTESTO MEMORIA (NON CHIEDERE NUOVAMENTE):
 {context_section}
 
-OBIETTIVO ATTUALE:  {next_slot_info}
+OBIETTIVO ATTUALE: {next_slot_info}
 DIRETTIVE: {path_instruction}
-FASE:  {phase} | PERCORSO: {path}
+FASE: {phase} | PERCORSO: {path}
+{abc_instruction}
 
 ESTRAZIONE AUTOMATICA: 
 Se l'utente fornisce spontaneamente dati (es. "Sono a Bologna e mi fa male la testa"):
@@ -298,17 +348,37 @@ Se l'utente fornisce spontaneamente dati (es. "Sono a Bologna e mi fa male la te
 
 FORMATO RISPOSTA JSON:
 {{
-    "testo": "singola domanda mirata",
+    "testo": "domanda + opzioni formattate (se fase richiede survey)",
     "tipo_domanda": "survey|scale|text|confirmation",
-    "opzioni": ["A", "B"] o null,
+    "opzioni": ["Testo opzione A", "Testo opzione B", "Testo opzione C"] o null,
     "fase_corrente": "{phase}",
     "dati_estratti": {{
         "LOCATION": "nome_comune" (se presente),
         "CHIEF_COMPLAINT": "sintomo" (se presente),
         "PAIN_SCALE": 1-10 (se presente),
-        "age": numero (se presente)
+        "RED_FLAGS": ["lista", "sintomi"] (se presenti),
+        "age": numero (se presente),
+        "sex": "M|F" (se presente),
+        "medications": "testo" (se presente)
     }},
-    "metadata": {{ "urgenza": 1-5, "area": ".. .", "confidence": 0.0-1.0, "fallback_used": false }}
+    "metadata": {{ "urgenza": 1-5, "area": "...", "confidence": 0.0-1.0, "fallback_used": false }}
+}}
+
+ESEMPI:
+Per RED_FLAGS: 
+{{
+    "testo": "Hai avuto febbre alta (sopra 38.5°C) nelle ultime 24 ore?",
+    "tipo_domanda": "survey",
+    "opzioni": ["Sì, febbre superiore a 38.5°C", "Febbre leggera (sotto 38.5°C)", "No, nessuna febbre"],
+    ...
+}}
+
+Per CHIEF_COMPLAINT:
+{{
+    "testo": "Qual è il sintomo che ti preoccupa di più?",
+    "tipo_domanda": "survey",
+    "opzioni": ["Dolore", "Febbre", "Altro sintomo (specifica)"],
+    ...
 }}
 """
 

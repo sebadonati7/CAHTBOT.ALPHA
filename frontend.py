@@ -14,6 +14,18 @@ import logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 from datetime import datetime
+
+# ============================================
+# IMPORT SESSION STORAGE
+# ============================================
+try:
+    from session_storage import get_storage, sync_session_to_storage, load_session_from_storage
+    SESSION_STORAGE_ENABLED = True
+    logger.info("✅ Session Storage caricato con successo")
+except ImportError as e:
+    SESSION_STORAGE_ENABLED = False
+    logger.warning(f"⚠️ Session Storage non disponibile: {e}")
+
 # ============================================
 # IMPORT FSM DA PR #7
 # ============================================
@@ -1580,9 +1592,46 @@ def save_structured_log():
             f.write(json.dumps(log_entry, ensure_ascii=False) + '\n')
         
         logger.info(f"Structured log 2.0 salvato: session={st.session_state.session_id}")
+        
+        # 🆕 SYNC TO SESSION STORAGE
+        if SESSION_STORAGE_ENABLED:
+            try:
+                sync_session_to_storage(st.session_state.session_id, st.session_state)
+                logger.info(f"✅ Session synced to storage: {st.session_state.session_id}")
+            except Exception as sync_error:
+                logger.error(f"❌ Failed to sync to storage: {sync_error}")
     
     except Exception as e:
         logger.error(f"Failed to save structured log: {e}", exc_info=True)
+
+
+def auto_sync_session_storage():
+    """
+    Sincronizza automaticamente lo stato della sessione nello storage.
+    Chiamata periodicamente durante la conversazione per garantire persistenza.
+    
+    NUOVO (2026): Supporto per sincronizzazione cross-istanza.
+    """
+    if not SESSION_STORAGE_ENABLED:
+        return
+    
+    # Throttle: sync max ogni 10 secondi
+    last_sync = st.session_state.get('_last_storage_sync', 0)
+    current_time = time.time()
+    
+    if current_time - last_sync < 10:
+        logger.debug(f"Throttling storage sync (last: {current_time - last_sync:.1f}s ago)")
+        return
+    
+    try:
+        success = sync_session_to_storage(st.session_state.session_id, st.session_state)
+        if success:
+            st.session_state._last_storage_sync = current_time
+            logger.debug(f"✅ Auto-sync session storage: {st.session_state.session_id}")
+        else:
+            logger.warning(f"⚠️ Auto-sync failed for session: {st.session_state.session_id}")
+    except Exception as e:
+        logger.error(f"❌ Auto-sync error: {e}")
 
 def get_step_display_name(step) -> str:
     """
@@ -2175,10 +2224,64 @@ def render_disposition_summary():
             save_structured_log()
             st.success("✅ Dati salvati. Puoi chiudere la finestra.")
     
+    # === SEZIONE 5: PULSANTI D'AZIONE (HANDOVER CLINICO) ===
+    st.divider()
+    st.markdown("### 📱 Azioni di Supporto (In Sviluppo)")
+    
+    # Display buttons as specified in schema
+    col_action1, col_action2, col_action3 = st.columns(3)
+    
+    with col_action1:
+        # Button 1: Invia al MMG (Coming soon)
+        if st.button(
+            "📧 Invia al mio Medico\n(In arrivo...)",
+            use_container_width=True,
+            key="btn_send_to_mmg",
+            disabled=True,
+            help="Funzionalità in sviluppo: Invio report SBAR al Medico di Medicina Generale"
+        ):
+            st.info("Questa funzionalità sarà disponibile presto.")
+    
+    with col_action2:
+        # Button 2: Chiama Struttura (Coming soon)
+        telefono = None
+        if nearest and len(nearest) > 0:
+            telefono = nearest[0].get('telefono') or nearest[0].get('contatti', {}).get('telefono')
+        
+        button_label = "📞 Chiama Struttura\n(In arrivo...)"
+        if telefono:
+            button_label = f"📞 Chiama {telefono}\n(In arrivo...)"
+        
+        if st.button(
+            button_label,
+            use_container_width=True,
+            key="btn_call_facility",
+            disabled=True,
+            help="Funzionalità in sviluppo: Chiamata diretta alla struttura"
+        ):
+            st.info("Questa funzionalità sarà disponibile presto.")
+    
+    with col_action3:
+        # Button 3: Mappa per PS (Coming soon)
+        if st.button(
+            "🗺️ Mappa per il PS\n(In arrivo...)",
+            use_container_width=True,
+            key="btn_map_to_ps",
+            disabled=True,
+            help="Funzionalità in sviluppo: Navigazione verso Pronto Soccorso più vicino"
+        ):
+            st.info("Questa funzionalità sarà disponibile presto.")
+    
+    # Explanation box
+    st.caption(
+        "💡 **Nota di Sviluppo**: I pulsanti sopra rappresentano funzionalità in fase di implementazione "
+        "per il supporto al handover clinico (passaggio delle informazioni al personale sanitario)."
+    )
+    
     # DISCLAIMER FINALE
     st.info("ℹ️ **Nota:** Questa valutazione non sostituisce il parere medico. In caso di dubbi, contatta il 118.")
     
-    logger.info(f"Disposition summary rendered: type={rec_type}, urgency={avg_urgency:. 2f}, specialization={specialization}")
+    logger.info(f"Disposition summary rendered: type={rec_type}, urgency={avg_urgency:.2f}, specialization={specialization}")
 
 def update_backend_metadata(metadata):
     """
@@ -2289,6 +2392,8 @@ def init_session():
     """
     Inizializza lo stato della sessione ottimizzato per Triage AI.
     Integra i campi necessari per i protocolli KB (DA5, ASQ, Percorsi A/B/C).
+    
+    NUOVO: Supporta caricamento da SessionStorage per persistenza cross-istanza.
     """
     if "session_id" not in st.session_state:
         # --- 1. IDENTITÀ E TRACKING ---
@@ -2326,7 +2431,54 @@ def init_session():
         # --- 7. QUALITÀ AI ---
         st.session_state.ai_retry_count = {} # Monitora fallimenti estrazione dati
         
+        # --- 8. SESSION STORAGE INTEGRATION (NUOVO) ---
+        st.session_state._storage_sync_enabled = SESSION_STORAGE_ENABLED
+        st.session_state._last_storage_sync = None
+        
         logger.info(f"Sessione Advanced inizializzata: {st.session_state.session_id}")
+    
+    # --- 9. TENTATIVO DI CARICAMENTO DA STORAGE (NUOVO) ---
+    # Se è attivato il session storage e la sessione è nuova, cerca di recuperare
+    if SESSION_STORAGE_ENABLED and st.session_state.get('_last_storage_sync') is None:
+        # Controlla se c'è un session_id nei query params per cross-instance sync
+        try:
+            # Try new API first (Streamlit >= 1.30)
+            query_params = st.query_params
+            stored_session_id = query_params.get('session_id')
+        except AttributeError:
+            # Fallback to experimental API for older versions
+            query_params = st.experimental_get_query_params()
+            stored_session_id = query_params.get('session_id', [None])[0]
+        
+        if stored_session_id:
+            logger.info(f"🔍 Tentativo di caricamento sessione da storage: {stored_session_id}")
+            stored_data = load_session_from_storage(stored_session_id)
+            
+            if stored_data:
+                # Carica dati dalla storage
+                st.session_state.session_id = stored_session_id
+                st.session_state.messages = stored_data.get('messages', [])
+                st.session_state.collected_data = stored_data.get('collected_data', {})
+                st.session_state.specialization = stored_data.get('specialization', 'Generale')
+                st.session_state.triage_path = stored_data.get('triage_path', 'C')
+                st.session_state.metadata_history = stored_data.get('metadata_history', [])
+                st.session_state.user_comune = stored_data.get('user_comune')
+                st.session_state.current_phase_idx = stored_data.get('current_phase_idx', 0)
+                
+                # Ricostruisci current_step da string se necessario
+                if 'current_step' in stored_data:
+                    step_name = stored_data['current_step']
+                    if isinstance(step_name, str):
+                        try:
+                            st.session_state.current_step = TriageStep[step_name]
+                        except KeyError:
+                            st.session_state.current_step = TriageStep.LOCATION
+                
+                st.session_state._last_storage_sync = time.time()
+                logger.info(f"✅ Sessione caricata da storage: {stored_session_id}")
+                st.info(f"🔄 Sessione ripristinata: {len(st.session_state.messages)} messaggi caricati")
+            else:
+                logger.warning(f"⚠️ Sessione non trovata in storage: {stored_session_id}")
 
 def can_proceed_to_next_step() -> bool:
     """
@@ -2647,7 +2799,10 @@ def render_main_application():
                                     logger.info(f"✅ RED_FLAGS salvato da risposta testuale:  {last_user_msg}")
                                     auto_advance_if_ready()
                     
-                    # 8. Rerun
+                    # 8. Auto-sync session to storage (NUOVO)
+                    auto_sync_session_storage()
+                    
+                    # 9. Rerun
                     st.rerun()
                 
                 except Exception as e:
