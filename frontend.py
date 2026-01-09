@@ -2362,21 +2362,20 @@ def render_main_application():
     """Entry point principale applicazione."""
     init_session()
     
-    # ✅ CORREZIONE:   Inizializza orchestrator PRIMA di tutto
-    # Verifica se è già stato creato (per evitare reinizializzazioni)
-    if 'orchestrator' not in st.session_state:
+    # Inizializza orchestrator PRIMA di tutto
+    if 'orchestrator' not in st. session_state:
         from model_orchestrator_v2 import ModelOrchestrator
         st. session_state. orchestrator = ModelOrchestrator()
         logger.info("🤖 Orchestrator inizializzato")
     
     # Usa l'orchestrator dalla session_state
-    orchestrator = st. session_state.orchestrator
+    orchestrator = st.session_state. orchestrator
     
     # Inizializza il servizio farmacie
     pharmacy_db = PharmacyService()
 
     # STEP 1: Consenso GDPR obbligatorio
-    if not st.session_state.get('privacy_accepted', False):  # ✅ Cambiato da gdpr_consent
+    if not st.session_state.get('privacy_accepted', False):
         st.markdown("### 📋 Benvenuto in Health Navigator")
         render_disclaimer()
         if st.button("✅ Accetto e Inizio Triage", type="primary", use_container_width=True, key="accept_gdpr_btn"):
@@ -2390,7 +2389,7 @@ def render_main_application():
 
     # STEP 3: Check disponibilità AI
     if not orchestrator.is_available():
-        st.error("❌ Servizio AI offline.  Riprova più tardi.")
+        st.error("❌ Servizio AI offline. Riprova più tardi.")
         return
 
     # STEP 4: Rendering cronologia messaggi con TTS opzionale
@@ -2400,7 +2399,7 @@ def render_main_application():
             
             if m["role"] == "assistant":
                 auto_speech = st.session_state.get('auto_speech', False)
-                is_last_message = (i == len(st.session_state. messages) - 1)
+                is_last_message = (i == len(st.session_state.messages) - 1)
                 auto_play = auto_speech and is_last_message
                 
                 text_to_speech_button(
@@ -2411,21 +2410,20 @@ def render_main_application():
 
     # STEP 5: Check se step finale
     if st.session_state. current_step == TriageStep.DISPOSITION and \
-       st.session_state.step_completed. get(TriageStep. DISPOSITION, False):
+       st.session_state. step_completed. get(TriageStep. DISPOSITION, False):
         render_disposition_summary()
         save_structured_log()
         st.stop()
 
     # --- STEP 6: INPUT CHAT E GENERAZIONE AI ---
-    # Si attiva solo se non c'è una survey (bottoni) pendente
     if not st.session_state.get("pending_survey"):
-        # ✅ CORREZIONE:  Inizializza le chiavi API PRIMA di st.chat_input
+        # Inizializza le chiavi API
         groq_key = st.secrets. get("GROQ_API_KEY", "")
         gemini_key = st.secrets.get("GEMINI_API_KEY", "")
         
-        # Validazione configurazione (bloccante se mancano entrambe le chiavi)
+        # Validazione configurazione
         if not groq_key and not gemini_key:
-            st.warning("⚠️ Configurazione API mancante.   Controlla il file secrets.toml.")
+            st.warning("⚠️ Configurazione API mancante.  Controlla il file secrets.toml.")
             st.info("💡 Aggiungi almeno una delle seguenti chiavi:\n- `GROQ_API_KEY`\n- `GEMINI_API_KEY`")
             st.stop()
         
@@ -2436,54 +2434,51 @@ def render_main_application():
             logger.info("✅ Orchestrator configurato con chiavi API")
         
         # Input utente
-        if raw_input := st.chat_input("💬 Descrivi la situazione..."):
+        if raw_input := st.chat_input("💬 Descrivi la situazione... "):
             # 1. Sanificazione Input
             user_input = DataSecurity.sanitize_input(raw_input)
-    
+            
             # ============================================
             # 🆕 FSM: CLASSIFICAZIONE PRIMO MESSAGGIO
             # ============================================
             is_first_message = len(st.session_state.messages) == 0
-    
+            
             if FSM_ENABLED and is_first_message:
                 urgency_score = classify_initial_urgency_fsm(user_input)
-        
-                if urgency_score:
+                
+                if urgency_score: 
                     # A. Se richiede 118 immediato
-                    if urgency_score.requires_immediate_118:
+                    if urgency_score. requires_immediate_118:
                         st.session_state.emergency_level = EmergencyLevel.RED
                         render_emergency_overlay(EmergencyLevel.RED)
-                        logger.critical(f"🚨 118 IMMEDIATO rilevato da FSM | Rationale: {urgency_score. rationale}")
-            
+                        logger.critical(f"🚨 118 IMMEDIATO rilevato da FSM | Rationale: {urgency_score.rationale}")
+                    
                     # B. Se path Mental Health (B) con branch INFO
-                    elif urgency_score. assigned_path == TriagePath.B and urgency_score.assigned_branch == TriageBranch. INFORMAZIONI:
+                    elif urgency_score.assigned_path == TriagePath.B and urgency_score.assigned_branch == TriageBranch. INFORMAZIONI:
                         st.info(f"ℹ️ Rilevata richiesta informativa su salute mentale")
                         logger.info(f"📘 Branch INFORMAZIONI attivato | Rationale: {urgency_score.rationale}")
-            
+                    
                     # C. Path Emergency (A) - Max 3 domande
                     elif urgency_score.assigned_path == TriagePath.A: 
-                        st.session_state. triage_path = "A"
-                        st. warning(f"⚠️ Percorso Emergenza attivato | Urgenza: {urgency_score. score}/5")
-                        logger. warning(f"🚨 Path A (Emergency) | Score: {urgency_score.score} | Flags: {urgency_score.detected_red_flags}")
-            
-                    # D.  Estrazione entità con FSM
+                        st.session_state.triage_path = "A"
+                        st.warning(f"⚠️ Percorso Emergenza attivato | Urgenza: {urgency_score. score}/5")
+                        logger.warning(f"🚨 Path A (Emergency) | Score: {urgency_score.score} | Flags: {urgency_score.detected_red_flags}")
+                    
+                    # D. Estrazione entità con FSM
                     if st.session_state.get('fsm_bridge'):
-                        extracted_data = st.session_state.fsm_bridge.extract_entities_from_text(user_input)
+                        extracted_data = st.session_state. fsm_bridge.extract_entities_from_text(user_input)
                         if extracted_data:
                             # Sincronizza con TriageState
-                            st. session_state.triage_state = st.session_state.fsm_bridge.sync_session_context(
+                            st.session_state.triage_state = st.session_state.fsm_bridge.sync_session_context(
                                 st.session_state.triage_state,
                                 extracted_data
                             )
-                            logger.info(f"✅ Dati estratti da FSM:  {list(extracted_data.keys())}")
-    
-    # 2. Check Emergenza Immediata (Text-based Legacy)
-    emergency_level = assess_emergency_level(user_input, {})
+                            logger.info(f"✅ Dati estratti da FSM: {list(extracted_data.keys())}")
             
-            # 2. Check Emergenza Immediata (Text-based)
+            # 2. Check Emergenza Immediata (Text-based Legacy)
             emergency_level = assess_emergency_level(user_input, {})
-            if emergency_level:  
-                st.session_state.emergency_level = emergency_level
+            if emergency_level:
+                st. session_state.emergency_level = emergency_level
                 render_emergency_overlay(emergency_level)
             
             # 3. Aggiungi messaggio utente alla cronologia
@@ -2494,34 +2489,34 @@ def render_main_application():
             
             # 4. Generazione Risposta AI
             with st.chat_message("assistant", avatar="🩺"):
-                placeholder = st. empty()
-                typing = st. empty()
+                placeholder = st.empty()
+                typing = st.empty()
                 typing.markdown('<div class="typing-indicator">🔄 Analisi in corso...</div>', unsafe_allow_html=True)
                 
                 # Parametri dinamici dallo stato
                 current_phase = PHASES[st.session_state. current_phase_idx]
                 phase_id = current_phase["id"]
-                path = st.session_state.get('triage_path', 'C')  # Path dinamico
+                path = st.session_state.get('triage_path', 'C')
                 
                 full_text_vis = ""
                 final_obj = None
                 
                 try:
-                    # ✅ Chiamata streaming con collected_data per context awareness
+                    # Chiamata streaming con collected_data per context awareness
                     res_gen = stream_ai_response(
                         orchestrator,
                         st.session_state.messages,
                         path,
                         phase_id,
-                        collected_data=st.session_state. collected_data,
-                        is_first_message=is_first  # ✅ NUOVO parametro
+                        collected_data=st.session_state.collected_data,
+                        is_first_message=is_first
                     )
                     
                     # Rimuovi subito l'indicatore di caricamento
                     typing.empty()
                     
                     # Consumo generatore con logica pulita
-                    for chunk in res_gen: 
+                    for chunk in res_gen:
                         # CASO A: Dizionario già parsato
                         if isinstance(chunk, dict):
                             final_obj = chunk
@@ -2530,30 +2525,30 @@ def render_main_application():
                                 full_text_vis = text_chunk
                                 placeholder.markdown(full_text_vis)
                         
-                        # CASO B:   Stringa (streaming incrementale)
+                        # CASO B:  Stringa (streaming incrementale)
                         elif isinstance(chunk, str):
                             full_text_vis += chunk
                             placeholder.markdown(full_text_vis)
                         
                         # CASO C: Oggetti Pydantic V2
                         elif hasattr(chunk, 'model_dump'):
-                            final_obj = chunk. model_dump()
+                            final_obj = chunk.model_dump()
                             text_chunk = final_obj.get("testo", "")
-                            if text_chunk:  
+                            if text_chunk: 
                                 full_text_vis = text_chunk
-                                placeholder.markdown(full_text_vis)
+                                placeholder. markdown(full_text_vis)
                     
                     # 5. Salvataggio Risposta AI
                     if full_text_vis:
-                        st.session_state.messages. append({
+                        st.session_state.messages.append({
                             "role": "assistant",
                             "content": full_text_vis
                         })
                         logger.info(f"✅ Messaggio AI salvato ({len(full_text_vis)} caratteri)")
                     else:
                         fallback_msg = "Mi dispiace, non ho ricevuto una risposta valida.  Riprova."
-                        st.session_state.messages. append({
-                            "role":  "assistant",
+                        st.session_state.messages.append({
+                            "role": "assistant",
                             "content": fallback_msg
                         })
                         placeholder.warning(fallback_msg)
@@ -2566,6 +2561,7 @@ def render_main_application():
                         if metadata: 
                             # Sincronizzazione stato backend
                             update_backend_metadata(metadata)
+                            
                             # ============================================
                             # 🆕 FSM: SINCRONIZZAZIONE DATI
                             # ============================================
@@ -2576,29 +2572,30 @@ def render_main_application():
                                         fsm_extracted = st.session_state.fsm_bridge.extract_entities_from_text(full_text_vis)
                                         if fsm_extracted:
                                             # Sincronizza con TriageState
-                                            st.session_state.triage_state = st. session_state.fsm_bridge.sync_session_context(
-                                                st.session_state. triage_state,
+                                            st.session_state.triage_state = st.session_state.fsm_bridge.sync_session_context(
+                                                st.session_state.triage_state,
                                                 fsm_extracted
                                             )
-        
-                                    # B. Sincronizza collected_data legacy con FSM
+                                    
+                                    # B.  Sincronizza collected_data legacy con FSM
                                     if st.session_state.collected_data:
-                                        st.session_state.triage_state = st.session_state. fsm_bridge.sync_session_context(
-                                            st.session_state.triage_state,
-                                            st.session_state. collected_data
+                                        st. session_state.triage_state = st.session_state.fsm_bridge.sync_session_context(
+                                            st. session_state.triage_state,
+                                            st.session_state.collected_data
                                         )
-        
+                                    
                                     # C. Verifica completezza triage
                                     validation = st.session_state.fsm_bridge.validate_triage_completeness(
                                         st.session_state. triage_state
                                     )
-        
+                                    
                                     if validation['can_proceed_disposition'] and not validation['is_complete']:
-                                        logger.info(f"⚠️ Triage parziale ma sufficiente per disposition | "
-                                                    f"Completezza: {validation['completion_percentage']:.1%}")
-        
+                                        logger. info(f"⚠️ Triage parziale ma sufficiente per disposition | "
+                                                   f"Completezza: {validation['completion_percentage']:.1%}")
+                                
                                 except Exception as e:
                                     logger.error(f"❌ Errore sincronizzazione FSM: {e}", exc_info=True)
+                            
                             # Verifica emergenze dai metadati
                             emergency_level = assess_emergency_level(user_input, metadata)
                             if emergency_level:
@@ -2606,16 +2603,16 @@ def render_main_application():
                                 render_emergency_overlay(emergency_level)
                             
                             # Gestione Protocolli Critici
-                            kb_ref = metadata. get("kb_reference", "")
-                            if kb_ref:  
-                                st.session_state.kb_reference = kb_ref
-                                logger.info(f"📄 Protocollo rilevato: {kb_ref}")
+                            kb_ref = metadata.get("kb_reference", "")
+                            if kb_ref:
+                                st. session_state.kb_reference = kb_ref
+                                logger. info(f"📄 Protocollo rilevato:  {kb_ref}")
                                 
                                 critical_protocols = ["DA5", "ASQ", "WAST", "AUDIT"]
                                 if any(protocol in kb_ref for protocol in critical_protocols):
                                     logger.warning(f"🚨 Protocollo critico:  {kb_ref}")
                                     if not st.session_state.get('emergency_level'):
-                                        st.session_state.emergency_level = EmergencyLevel.ORANGE
+                                        st.session_state.emergency_level = EmergencyLevel. ORANGE
                                     render_emergency_overlay(st.session_state.emergency_level)
                         
                         # 7. Gestione Survey
@@ -2623,41 +2620,39 @@ def render_main_application():
                             st.session_state.pending_survey = final_obj
                             logger.info(f"📋 Survey con {len(final_obj['opzioni'])} opzioni")
                         
-                        # ✅ NUOVO:  7b. Estrazione automatica dati multipli
-                        dati_estratti = final_obj. get("dati_estratti", {})
+                        # 7b. Estrazione automatica dati multipli
+                        dati_estratti = final_obj.get("dati_estratti", {})
                         if dati_estratti and isinstance(dati_estratti, dict):
                             for key, value in dati_estratti.items():
-                                if value:    # Solo se il valore non è vuoto
+                                if value: 
                                     st.session_state.collected_data[key] = value
-                                    logger.info(f"✅ Dato estratto automaticamente: {key} = {value}")
-    
-                            # ✅ Check auto-advancement dopo estrazione dati
+                                    logger. info(f"✅ Dato estratto automaticamente: {key} = {value}")
+                            
+                            # Check auto-advancement dopo estrazione dati
                             auto_advance_if_ready()
-
-                        # ✅ FIX BUG #2: Salvataggio fallback per RED_FLAGS se utente risponde testualmente
-                        if st.session_state.current_step == TriageStep. RED_FLAGS: 
-                            # Se l'utente ha risposto ma l'AI non ha estratto dati
-                            if 'RED_FLAGS' not in st.session_state.collected_data:
-                                # Salva l'ultimo messaggio utente come risposta RED_FLAGS
+                        
+                        # FIX BUG #2: Salvataggio fallback per RED_FLAGS
+                        if st.session_state.current_step == TriageStep. RED_FLAGS:
+                            if 'RED_FLAGS' not in st.session_state. collected_data:
                                 last_user_msg = next(
                                     (m['content'] for m in reversed(st.session_state.messages) if m.get('role') == 'user'),
                                     None
                                 )
-                                if last_user_msg: 
-                                    st.session_state. collected_data['RED_FLAGS'] = last_user_msg
-                                    logger.info(f"✅ RED_FLAGS salvato da risposta testuale: {last_user_msg}")
+                                if last_user_msg:
+                                    st.session_state.collected_data['RED_FLAGS'] = last_user_msg
+                                    logger.info(f"✅ RED_FLAGS salvato da risposta testuale:  {last_user_msg}")
                                     auto_advance_if_ready()
                     
                     # 8. Rerun
                     st.rerun()
                 
-                except Exception as e:  
-                    logger.error(f"❌ Errore critico:   {e}", exc_info=True)
+                except Exception as e:
+                    logger.error(f"❌ Errore critico: {e}", exc_info=True)
                     error_msg = "Si è verificato un errore di comunicazione con l'AI. Riprova."
                     placeholder.error(error_msg)
                     st.session_state. messages.append({
                         "role": "assistant",
-                        "content":   "⚠️ " + error_msg
+                        "content": "⚠️ " + error_msg
                     })
                     st.session_state.pending_survey = None
 
@@ -2674,23 +2669,23 @@ def render_main_application():
         cols = st.columns(len(opts))
         
         for i, opt in enumerate(opts):
-            unique_key = f"btn_{st.session_state. current_step.name}_{i}"
-            if cols[i]. button(opt, key=unique_key, use_container_width=True):
+            unique_key = f"btn_{st.session_state.current_step. name}_{i}"
+            if cols[i].button(opt, key=unique_key, use_container_width=True):
                 current_step = st.session_state.current_step
                 step_name = current_step.name
                 validation_success = False
-        
-                # ✅ FIX BUG #1: Aggiungi messaggio utente alla cronologia PRIMA della validazione
+                
+                # FIX BUG #1: Aggiungi messaggio utente alla cronologia PRIMA della validazione
                 st.session_state.messages.append({
                     "role": "user",
                     "content": opt
                 })
                 logger.info(f"✅ Bottone cliccato salvato in cronologia: {opt}")
-        
+                
                 # Validazione per step
-                if current_step == TriageStep. LOCATION:
+                if current_step == TriageStep.LOCATION:
                     is_valid, normalized = InputValidator.validate_location(opt)
-                    if is_valid:
+                    if is_valid: 
                         st.session_state.collected_data[step_name] = normalized
                         st.session_state.user_comune = normalized
                         validation_success = True
@@ -2703,12 +2698,12 @@ def render_main_application():
                     st.session_state.collected_data[step_name] = opt
                     validation_success = True
                 
-                elif current_step == TriageStep. PAIN_SCALE:
+                elif current_step == TriageStep.PAIN_SCALE:
                     is_valid, pain_value = InputValidator.validate_pain_scale(opt)
-                    st. session_state.collected_data[step_name] = pain_value if is_valid else opt
+                    st.session_state.collected_data[step_name] = pain_value if is_valid else opt
                     validation_success = True
                 
-                elif current_step == TriageStep.RED_FLAGS: 
+                elif current_step == TriageStep.RED_FLAGS:
                     is_valid, flags = InputValidator.validate_red_flags(opt)
                     st.session_state.collected_data[step_name] = flags
                     validation_success = True
@@ -2720,7 +2715,7 @@ def render_main_application():
                     st.session_state.collected_data[step_name] = opt
                     validation_success = True
                 
-                elif current_step == TriageStep.DISPOSITION: 
+                elif current_step == TriageStep.DISPOSITION:
                     st.session_state.collected_data[step_name] = opt
                     validation_success = True
                 
@@ -2735,14 +2730,14 @@ def render_main_application():
                 st.rerun()
     
     # Gestione input personalizzato "Altro"
-    if st. session_state.get("show_altro"):
+    if st.session_state.get("show_altro"):
         st.markdown("<div class='fade-in'>", unsafe_allow_html=True)
         c1, c2 = st. columns([4, 1])
         
         val = c1.text_input(
             "Dettaglia qui:",
             placeholder="Scrivi.. .",
-            key=f"altro_input_{st.session_state.current_step.name}"
+            key=f"altro_input_{st.session_state. current_step.name}"
         )
         
         if c2.button("✖", key=f"cancel_altro_{st.session_state.current_step.name}"):
@@ -2750,7 +2745,7 @@ def render_main_application():
             st.rerun()
         
         if val and st.button("Invia", key=f"send_custom_{st.session_state.current_step.name}", use_container_width=True):
-            st.session_state. messages.append({"role": "user", "content": val})
+            st.session_state.messages.append({"role": "user", "content": val})
             current_step = st.session_state.current_step
             step_name = current_step.name
             validation_success = False
@@ -2767,13 +2762,13 @@ def render_main_application():
                     time.sleep(2)
                     st.rerun()
             
-            elif current_step == TriageStep.CHIEF_COMPLAINT:
+            elif current_step == TriageStep. CHIEF_COMPLAINT:
                 st.session_state.collected_data[step_name] = val
                 validation_success = True
             
             elif current_step == TriageStep.PAIN_SCALE:
-                is_valid, pain_value = InputValidator.validate_pain_scale(val)
-                st.session_state.collected_data[step_name] = pain_value if is_valid else val
+                is_valid, pain_value = InputValidator. validate_pain_scale(val)
+                st.session_state. collected_data[step_name] = pain_value if is_valid else val
                 validation_success = True
             
             elif current_step == TriageStep.RED_FLAGS:
@@ -2781,13 +2776,13 @@ def render_main_application():
                 validation_success = True
             
             elif current_step == TriageStep. ANAMNESIS:
-                is_valid, age = InputValidator. validate_age(val)
+                is_valid, age = InputValidator.validate_age(val)
                 if is_valid:
                     st.session_state.collected_data['age'] = age
                 st.session_state.collected_data[step_name] = val
                 validation_success = True
             
-            elif current_step == TriageStep.DISPOSITION:  
+            elif current_step == TriageStep.DISPOSITION: 
                 st.session_state.collected_data[step_name] = val
                 validation_success = True
             
@@ -2800,7 +2795,6 @@ def render_main_application():
                 st. rerun()
         
         st.markdown("</div>", unsafe_allow_html=True)
-
 
 def main():
     """Entry point principale che chiama render_main_application."""
