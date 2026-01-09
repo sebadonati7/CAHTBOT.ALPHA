@@ -115,6 +115,102 @@ def validate_comune_er(city_name):
         return False
     return city_name.lower() in COMUNI_ER_VALIDI
 
+
+# --- DISTRICT MAPPING FUNCTIONS (NEW FOR V2) ---
+def load_district_mapping():
+    """
+    Load health district mappings from distretti_sanitari_er.json
+    
+    Returns:
+        dict: District mapping data
+    """
+    districts_file = "distretti_sanitari_er.json"
+    if not os.path.exists(districts_file):
+        st.warning(f"⚠️ File {districts_file} non trovato. Mapping distretti non disponibile.")
+        return {"health_districts": [], "comune_to_district_mapping": {}}
+    
+    try:
+        with open(districts_file, 'r', encoding='utf-8') as f:
+            return json.load(f)
+    except Exception as e:
+        st.error(f"❌ Errore caricamento mapping distretti: {e}")
+        return {"health_districts": [], "comune_to_district_mapping": {}}
+
+
+def get_district_from_comune(comune: str, district_data: dict) -> str:
+    """
+    Get district code from comune name
+    
+    Args:
+        comune: Municipality name
+        district_data: District mapping data
+        
+    Returns:
+        District code (e.g., "BOL-CIT") or "UNKNOWN"
+    """
+    if not comune or not district_data:
+        return "UNKNOWN"
+    
+    comune_lower = comune.lower().strip()
+    mapping = district_data.get("comune_to_district_mapping", {})
+    
+    return mapping.get(comune_lower, "UNKNOWN")
+
+
+def get_district_name(district_code: str, district_data: dict) -> str:
+    """
+    Get full district name from code
+    
+    Args:
+        district_code: District code (e.g., "BOL-CIT")
+        district_data: District mapping data
+        
+    Returns:
+        Full district name or code if not found
+    """
+    if not district_code or not district_data:
+        return district_code
+    
+    for ausl_data in district_data.get("health_districts", []):
+        for district in ausl_data.get("districts", []):
+            if district.get("code") == district_code:
+                return f"{district['name']} ({ausl_data['ausl']})"
+    
+    return district_code
+
+
+def filter_records_by_district(records: list, district_code: str, district_data: dict) -> list:
+    """
+    Filter triage records by district code
+    
+    Args:
+        records: List of triage records
+        district_code: District code to filter by
+        district_data: District mapping data
+        
+    Returns:
+        Filtered list of records
+    """
+    if district_code == "ALL":
+        return records
+    
+    filtered = []
+    for record in records:
+        # Check if record has district field
+        rec_district = record.get("distretto")
+        
+        # If not, try to infer from comune
+        if not rec_district:
+            comune = record.get("comune") or record.get("location")
+            if comune:
+                rec_district = get_district_from_comune(comune, district_data)
+        
+        if rec_district == district_code:
+            filtered.append(record)
+    
+    return filtered
+
+
 def parse_timestamp_robust(timestamp_str):
     """Parsing robusto di timestamp con timezone"""
     if not timestamp_str:
@@ -636,6 +732,9 @@ def export_to_excel(datastore, kpis):
 
 # --- MAIN APPLICATION ---
 def main():
+    # Load district mapping data (NEW FOR V2)
+    district_data = load_district_mapping()
+    
     # Load data
     datastore = TriageDataStore(LOG_FILE)
     
@@ -662,9 +761,21 @@ def main():
     else:
         sel_week = None
     
+    # Enhanced district selection with full names (NEW FOR V2)
     districts = datastore.get_unique_values('distretto')
     if districts:
-        sel_dist = st.sidebar.selectbox("Distretto", ["Tutti"] + sorted(districts))
+        district_options = ["Tutti"]
+        for dist_code in sorted(districts):
+            if dist_code and dist_code != "UNKNOWN":
+                dist_name = get_district_name(dist_code, district_data)
+                district_options.append(f"{dist_code} - {dist_name}")
+        
+        sel_dist_display = st.sidebar.selectbox("Distretto Sanitario", district_options)
+        # Extract code from display
+        if sel_dist_display == "Tutti":
+            sel_dist = "Tutti"
+        else:
+            sel_dist = sel_dist_display.split(" - ")[0]
     else:
         sel_dist = "Tutti"
     

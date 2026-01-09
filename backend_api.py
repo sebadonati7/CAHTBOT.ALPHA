@@ -76,6 +76,7 @@ def health_check():
 # ============================================================================
 
 @app.route('/session/<session_id>', methods=['GET'])
+@api_key_required
 def get_session(session_id: str):
     """
     Get session state by ID.
@@ -114,6 +115,7 @@ def get_session(session_id: str):
 
 
 @app.route('/session/<session_id>', methods=['POST'])
+@api_key_required
 def update_session(session_id: str):
     """
     Update or create session state.
@@ -177,6 +179,7 @@ def update_session(session_id: str):
 
 
 @app.route('/session/<session_id>', methods=['DELETE'])
+@api_key_required
 def delete_session(session_id: str):
     """
     Delete session by ID.
@@ -218,6 +221,7 @@ def delete_session(session_id: str):
 # ============================================================================
 
 @app.route('/sessions/active', methods=['GET'])
+@api_key_required
 def list_active_sessions():
     """
     List all active sessions with metadata.
@@ -245,6 +249,7 @@ def list_active_sessions():
 
 
 @app.route('/sessions/cleanup', methods=['POST'])
+@api_key_required
 def cleanup_old_sessions():
     """
     Clean up sessions older than specified hours.
@@ -300,6 +305,95 @@ def internal_error(error):
         'success': False,
         'error': 'Internal server error'
     }), 500
+
+
+# ============================================================================
+# TRIAGE REPORTING ENDPOINT (NEW FOR V2)
+# ============================================================================
+
+@app.route('/triage/complete', methods=['POST'])
+@api_key_required
+def receive_triage_completion():
+    """
+    Receive completed triage session data for reporting.
+    
+    Expected JSON body:
+    {
+        "session_id": "0001_090126",
+        "timestamp": "2026-01-09T19:30:00Z",
+        "comune": "Bologna",
+        "distretto": "BOL-CIT",
+        "path": "PERCORSO_C",
+        "urgency": 3,
+        "disposition": "CAU",
+        "sbar": {
+            "situation": "...",
+            "background": "...",
+            "assessment": "...",
+            "recommendation": "..."
+        },
+        "log": {
+            "messages": [...],
+            "collected_data": {...}
+        }
+    }
+    
+    Returns:
+        200: Data received successfully
+        400: Invalid request
+        500: Server error
+    """
+    try:
+        from datetime import datetime
+        import json
+        triage_data = request.get_json()
+        
+        if not triage_data:
+            return jsonify({
+                'success': False,
+                'error': 'No data provided'
+            }), 400
+        
+        # Validate required fields
+        required_fields = ['session_id', 'comune', 'path']
+        missing_fields = [f for f in required_fields if f not in triage_data]
+        
+        if missing_fields:
+            return jsonify({
+                'success': False,
+                'error': f'Missing required fields: {", ".join(missing_fields)}'
+            }), 400
+        
+        # Add reception timestamp
+        triage_data['received_at'] = datetime.now().isoformat()
+        
+        # Save to triage_logs.jsonl
+        log_file = "triage_logs.jsonl"
+        try:
+            with open(log_file, 'a', encoding='utf-8') as f:
+                f.write(json.dumps(triage_data, ensure_ascii=False) + '\n')
+            
+            logger.info(f"✅ POST /triage/complete - Session {triage_data['session_id']} logged")
+            
+            return jsonify({
+                'success': True,
+                'session_id': triage_data['session_id'],
+                'message': 'Triage data received and logged'
+            }), 200
+            
+        except Exception as file_error:
+            logger.error(f"❌ Failed to write to log file: {file_error}")
+            return jsonify({
+                'success': False,
+                'error': 'Failed to write log file'
+            }), 500
+    
+    except Exception as e:
+        logger.error(f"❌ POST /triage/complete - Error: {e}")
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
 
 
 # ============================================================================
