@@ -8,6 +8,7 @@ import requests
 import math
 import difflib  # Aggiunta per il matching dei comuni
 import logging
+from collections import Counter  # For update_backend_metadata
 
 # Configurazione base del logger
 logging.basicConfig(level=logging.INFO)
@@ -718,7 +719,7 @@ class BackendClient:
         Invia dati strutturati al backend rispettando il GDPR e arricchendo il contesto.
         """
         # 2. PROTEZIONE DELLA PRIVACY (GDPR Compliance)
-        if not st.session_state.get("gdpr_consent", False):
+        if not st.session_state.get("privacy_accepted", False):
             logger.warning("BACKEND_SYNC | Invio negato: Consenso GDPR mancante.")
             return 
             
@@ -819,8 +820,7 @@ class PharmacyService:
 
         results = []
         
-        # Importiamo le funzioni dal modulo geolocalizzazione aggiornato
-        from geolocalizzazione_er import haversine_distance, get_comune_coordinates
+        # Use functions already defined in this file
 
         for f in self.data:
             dist = None
@@ -1059,12 +1059,12 @@ def render_sidebar(pharmacy_db):
             
             reduce_motion = st.checkbox(
                 "Riduci Animazioni",
-                value=st. session_state.get('reduce_motion', False),
+                value=st.session_state.get('reduce_motion', False),
                 key='reduce_motion'
             )
             
             if reduce_motion:
-                st. markdown("""
+                st.markdown("""
                 <style>
                     *, *::before, *::after { animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; }
                 </style>
@@ -1074,7 +1074,7 @@ def render_sidebar(pharmacy_db):
                 for key in ['high_contrast', 'font_size', 'auto_speech', 'reduce_motion']:
                     if key in st.session_state: 
                         del st.session_state[key]
-                st. rerun()
+                st.rerun()
 
 
 # --- SESSION STATE, LOGICA DI AVANZAMENTO E GESTIONE DATI ---
@@ -1587,7 +1587,7 @@ def render_dynamic_step_tracker():
                             use_container_width=True
                         ):
                             del st.session_state. collected_data[step['key_data']]
-                            st. rerun()
+                            st.rerun()
             
             # ✅ CASO 2: Step corrente → Box blu animato
             elif current_step. name == step['id']:
@@ -1908,7 +1908,7 @@ def render_disposition_summary():
     
     # === SEZIONE 3: RICERCA STRUTTURA CON CACHING ===
     if facility_type:
-        st. markdown("### 📍 Struttura Più Vicina")
+        st.markdown("### 📍 Struttura Più Vicina")
         
         # INPUT DINAMICO:  Comune di ricerca
         comune_default = collected.get('LOCATION', '')
@@ -2330,9 +2330,9 @@ def render_main_application():
     init_session()
     
     # Inizializza orchestrator PRIMA di tutto
-    if 'orchestrator' not in st. session_state:
+    if 'orchestrator' not in st.session_state:
         from model_orchestrator_v2 import ModelOrchestrator
-        st. session_state. orchestrator = ModelOrchestrator()
+        st.session_state. orchestrator = ModelOrchestrator()
         logger.info("🤖 Orchestrator inizializzato")
     
     # Usa l'orchestrator dalla session_state
@@ -2445,7 +2445,7 @@ def render_main_application():
             # 2. Check Emergenza Immediata (Text-based Legacy)
             emergency_level = assess_emergency_level(user_input, {})
             if emergency_level:
-                st. session_state.emergency_level = emergency_level
+                st.session_state.emergency_level = emergency_level
                 render_emergency_overlay(emergency_level)
             
             # 3. Aggiungi messaggio utente alla cronologia
@@ -2546,8 +2546,8 @@ def render_main_application():
                                     
                                     # B.  Sincronizza collected_data legacy con FSM
                                     if st.session_state.collected_data:
-                                        st. session_state.triage_state = st.session_state.fsm_bridge.sync_session_context(
-                                            st. session_state.triage_state,
+                                        st.session_state.triage_state = st.session_state.fsm_bridge.sync_session_context(
+                                            st.session_state.triage_state,
                                             st.session_state.collected_data
                                         )
                                     
@@ -2572,7 +2572,7 @@ def render_main_application():
                             # Gestione Protocolli Critici
                             kb_ref = metadata.get("kb_reference", "")
                             if kb_ref:
-                                st. session_state.kb_reference = kb_ref
+                                st.session_state.kb_reference = kb_ref
                                 logger. info(f"📄 Protocollo rilevato:  {kb_ref}")
                                 
                                 critical_protocols = ["DA5", "ASQ", "WAST", "AUDIT"]
@@ -2702,7 +2702,7 @@ def render_main_application():
     # Gestione input personalizzato "Altro"
     if st.session_state.get("show_altro"):
         st.markdown("<div class='fade-in'>", unsafe_allow_html=True)
-        c1, c2 = st. columns([4, 1])
+        c1, c2 = st.columns([4, 1])
         
         val = c1.text_input(
             "Dettaglia qui:",
@@ -2760,9 +2760,9 @@ def render_main_application():
                 st.session_state.pending_survey = None
                 st.session_state.show_altro = False
                 advance_step()
-                if st. session_state.current_phase_idx < len(PHASES) - 1:
-                    st. session_state.current_phase_idx += 1
-                st. rerun()
+                if st.session_state.current_phase_idx < len(PHASES) - 1:
+                    st.session_state.current_phase_idx += 1
+                st.rerun()
         
         st.markdown("</div>", unsafe_allow_html=True)
 
