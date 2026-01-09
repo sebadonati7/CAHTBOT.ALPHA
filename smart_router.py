@@ -66,7 +66,7 @@ CRITICAL_RED_FLAGS = {
     r"emorragia\s+massiva": "Emorragia massiva",
     r"sangue\s+abbondante": "Emorragia massiva",
     r"paralisi": "Paralisi",
-    r"(braccio|gamba)\s+non\s+si\s+muove": "Paralisi"
+    r"\b(braccio|gamba)\s+non\s+si\s+muove\b": "Paralisi"
 }
 
 # High-priority red flags for Path A (fast-track)

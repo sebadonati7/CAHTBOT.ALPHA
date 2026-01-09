@@ -15,6 +15,7 @@ Classes:
 
 import re
 import logging
+import difflib
 from typing import Dict, List, Any, Optional
 from pydantic import ValidationError
 
@@ -154,7 +155,6 @@ class TriageSessionBridge:
                     logger.info(f"✅ Location set: {location}")
                 else:
                     # Try fuzzy matching
-                    import difflib
                     matches = difflib.get_close_matches(location_lower, COMUNI_ER, n=1, cutoff=0.8)
                     if matches:
                         current_state.patient_info.location = matches[0].title()
